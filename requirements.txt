@@ -3,3 +3,5 @@ uvicorn
 web3
 python-dotenv
 pydantic
+streamlit
+requests
