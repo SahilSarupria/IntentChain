@@ -1,10 +1,13 @@
 from fastapi import APIRouter
-from app.models.intent import IntentRequest
-from app.services.intent_engine import process_intent
+from pydantic import BaseModel
+from app.llm.intent_parser import parse_intent
 
 router = APIRouter()
 
+class PromptRequest(BaseModel):
+    prompt: str
+
 @router.post("/execute-intent")
-def execute_intent(intent: IntentRequest):
-    result = process_intent(intent)
-    return result
+def execute_intent(request: PromptRequest):
+    intent = parse_intent(request.prompt)
+    return intent

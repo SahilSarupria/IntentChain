@@ -63,34 +63,35 @@ if execute_btn and user_input:
     # Simple NLP mock (for now)
     # You can replace with backend parsing later
     payload = {
-        "action": "transfer",
-        "amount": 0.0001,
-        "recipient": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
-        "network": "sepolia",
-        "priority": "low_cost"
+        "prompt": user_input
     }
+
+    response = requests.post(BACKEND_URL, json=payload)
+    result = response.json()
 
     # ---- Intent Stage ----
     module_card(intent_box, "🧠 Intent Engine", "active", "Parsing user intent...")
     time.sleep(1)
+
+    intent = result
 
     module_card(
         intent_box,
         "🧠 Intent Engine",
         "done",
         f"""
-        Action: {payload['action']}<br>
-        Amount: {payload['amount']} ETH<br>
-        Priority: {payload['priority']}
+        {intent}
+        
         """
     )
-
+# Action: {intent.get('action')}<br>
+#         Amount: {intent.get('amount')}<br>
+#         Token: {intent.get('token')}<br>
     # ---- Strategy Stage ----
     module_card(strategy_box, "⚙ Strategy Engine", "active", "Evaluating execution strategy...")
     time.sleep(1)
 
-    response = requests.post(BACKEND_URL, json=payload)
-    result = response.json()
+    
 
     strategy = result.get("strategy", {})
 
