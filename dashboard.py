@@ -67,13 +67,20 @@ if execute_btn and user_input:
     }
 
     response = requests.post(BACKEND_URL, json=payload)
-    result = response.json()
+    try:
+        result = response.json()
+        intent = result
+    except requests.exceptions.JSONDecodeError:
+        st.error("Failed to parse JSON response. Raw response:")
+        intent = response
+        st.code(response.text)
+        st.stop()
 
     # ---- Intent Stage ----
     module_card(intent_box, "🧠 Intent Engine", "active", "Parsing user intent...")
     time.sleep(1)
 
-    intent = result
+    
 
     module_card(
         intent_box,

@@ -1,12 +1,7 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
-import torch
+from google import genai
+import os
+from dotenv import load_dotenv
 
-model_name = "microsoft/phi-3-mini-4k-instruct"
+load_dotenv()
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
-model = AutoModelForCausalLM.from_pretrained(
-    model_name,
-    dtype=torch.float16,  # or torch.float32 if no GPU
-    device_map="auto",
-    local_files_only=True
-)
+client = genai.Client(api_key="AIzaSyA0GGBKLni9Y8Y-HwZTwEHtGgBABbSEI7M")
