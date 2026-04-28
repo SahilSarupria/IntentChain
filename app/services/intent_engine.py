@@ -1,20 +1,18 @@
 from app.services.strategy_engine import evaluate_strategy
-from app.blockchain.executor import execute_transaction
+from app.blockchain.executor import build_unsigned_tx
 
-def process_intent(intent):
-    structured_intent = {
-        "action": intent.action,
-        "amount": intent.amount,
-        "recipient": intent.recipient,
-        "network": intent.network,
-        "priority": intent.priority
-    }
 
-    strategy = evaluate_strategy(structured_intent)
-    tx_result = execute_transaction(structured_intent, strategy)
+def build_tx_for_wallet(intent_dict: dict, from_address: str) -> dict:
+    """
+    Evaluate strategy and build an unsigned transaction.
+    Called after MetaMask wallet address is known.
+    Returns tx_params (for MetaMask) + strategy metadata.
+    """
+    strategy  = evaluate_strategy(intent_dict, from_address=from_address)
+    tx_params = build_unsigned_tx(intent_dict, strategy, from_address)
 
     return {
-        "intent": structured_intent,
-        "strategy": strategy,
-        "transaction_result": tx_result
+        "intent":    intent_dict,
+        "strategy":  strategy,
+        "tx_params": tx_params,   # handed to MetaMask for signing + broadcast
     }

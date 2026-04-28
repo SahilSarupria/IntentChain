@@ -5,50 +5,46 @@ from dotenv import load_dotenv
 load_dotenv()
 
 INFURA_URL = os.getenv("INFURA_URL")
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-WALLET_ADDRESS = os.getenv("WALLET_ADDRESS")
+# ✅ PRIVATE_KEY removed — signing now happens in the browser via MetaMask
+# ✅ WALLET_ADDRESS removed — comes from the connected MetaMask wallet at runtime
 
 w3 = Web3(Web3.HTTPProvider(INFURA_URL))
 
 print("Loaded INFURA:", INFURA_URL)
 
 
-def get_priority_fee(priority):
+def get_priority_fee(priority: str) -> int:
     if priority == "fast":
         return w3.to_wei(3, "gwei")
     if priority == "low_cost":
         return w3.to_wei(1, "gwei")
     return w3.to_wei(2, "gwei")
 
-def execute_transaction(intent, strategy):
-    try:
-        
-        print("INFURA:", INFURA_URL)
-        print("WALLET:", WALLET_ADDRESS)
-        print("Connected:", w3.is_connected())
-        print("Chain ID:", w3.eth.chain_id)
-        print("Wallet:", WALLET_ADDRESS)
-        print("Nonce:", w3.eth.get_transaction_count(WALLET_ADDRESS))
-        nonce = w3.eth.get_transaction_count(Web3.to_checksum_address(WALLET_ADDRESS))
-        block = w3.eth.get_block("latest")
-        base_fee = block["baseFeePerGas"] if "baseFeePerGas" in block else w3.eth.gas_price
-        priority_fee = get_priority_fee(intent["priority"])
 
-        tx = {
-            'nonce': nonce,
-            'to': intent["recipient"],
-            'value': w3.to_wei(intent["amount"], 'ether'),
-            'gas': strategy["gas_estimate"],
-            'maxFeePerGas': base_fee + priority_fee,
-            'maxPriorityFeePerGas': priority_fee,
-            'chainId': w3.eth.chain_id,
-        }
+def build_unsigned_tx(intent: dict, strategy: dict, from_address: str) -> dict:
+    """
+    Build an EIP-1559 transaction dict suitable for MetaMask's eth_sendTransaction.
 
-        signed_tx = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+    Returns hex-encoded fields (MetaMask expects hex strings, not ints).
+    The nonce is intentionally omitted — MetaMask manages it automatically.
+    The private key is never touched here.
+    """
+    checksum_from = Web3.to_checksum_address(from_address)
+    checksum_to   = Web3.to_checksum_address(intent["recipient"])
 
-        return {"tx_hash": tx_hash.hex()}
+    block    = w3.eth.get_block("latest")
+    base_fee = block.get("baseFeePerGas", w3.eth.gas_price)
+    prio_fee = get_priority_fee(intent["priority"])
+    max_fee  = base_fee + prio_fee
 
-    except Exception as e:
-        print("ERROR:", str(e))
-        return {"error": str(e)}
+    value_wei = w3.to_wei(intent["amount"], "ether")
+
+    return {
+        "from":                 checksum_from,
+        "to":                   checksum_to,
+        "value":                hex(value_wei),
+        "gas":                  hex(strategy["gas_estimate"]),
+        "maxFeePerGas":         hex(max_fee),
+        "maxPriorityFeePerGas": hex(prio_fee),
+        # chainId omitted — MetaMask infers it from the user's active network
+    }
