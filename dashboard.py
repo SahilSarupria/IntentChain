@@ -57,8 +57,8 @@ SHARED_STYLES = """
 def metamask_connect_widget(current_address: str | None) -> None:
     """
     Renders a MetaMask connect button in an iframe.
-    On connect, writes wallet address into the parent URL query params (`?wallet=...`)
-    and posts a message as a secondary signal.
+    On connect, posts the wallet address to the parent page and stores it in
+    parent localStorage for persistence across refreshes.
     """
     connected    = bool(current_address)
     addr_display = (current_address[:6] + "…" + current_address[-4:]) if connected else ""
@@ -108,12 +108,14 @@ async function connectWallet() {{
     document.getElementById('btn').textContent = '✓ Connected';
 
     try {{
-      const url = new URL(window.parent.location.href);
-      url.searchParams.set('wallet', addr);
-      window.parent.history.replaceState({{}}, '', url.toString());
-    }} catch(e) {{ /* ignore query param update issues */ }}
-
+      window.parent.localStorage.setItem('intentchain_wallet', addr);
+    }} catch(e) {{ /* ignore localStorage issues */ }}
     window.parent.postMessage({{type:'wallet_connected', address: addr}}, '*');
+
+    // Force a single rerun/reload so Streamlit picks up the persisted wallet immediately.
+    setTimeout(() => {{
+      try {{ window.parent.location.reload(); }} catch (e) {{ /* ignore */ }}
+    }}, 150);
   }} catch(e) {{
     err.style.display = 'block';
     err.textContent = '⚠ ' + (e.message || 'Connection rejected');
@@ -122,6 +124,52 @@ async function connectWallet() {{
 </script>
 """
     components.html(html, height=80, scrolling=False)
+
+
+def wallet_listener() -> None:
+    """
+    Listens for wallet postMessage events and hydrates from localStorage on load.
+    Writes the address into a hidden Streamlit text_input so Python can react.
+    """
+    html = """
+<style>body{margin:0;padding:0}</style>
+<script>
+function pushWalletToStreamlit(addr) {
+  if (!addr) return;
+
+  try {
+    window.parent.localStorage.setItem('intentchain_wallet', addr);
+  } catch (e) { /* ignore */ }
+
+  try {
+    const url = new URL(window.parent.location.href);
+    url.searchParams.set('wallet', addr);
+    window.parent.history.replaceState({}, '', url.toString());
+  } catch (e) { /* ignore */ }
+
+  try {
+    const inp = window.parent.document.querySelector('input[aria-label="wallet_capture"]');
+    if (inp) {
+      inp.value = addr;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  } catch (e) { /* ignore */ }
+}
+
+window.addEventListener('message', function(e) {
+  if (e.data && e.data.type === 'wallet_connected') {
+    pushWalletToStreamlit(e.data.address);
+  }
+});
+
+// Hydrate wallet after manual refresh/new Streamlit session.
+try {
+  const saved = window.parent.localStorage.getItem('intentchain_wallet');
+  if (saved) pushWalletToStreamlit(saved);
+} catch (e) { /* ignore */ }
+</script>
+"""
+    components.html(html, height=0, scrolling=False)
 
 
 
@@ -304,10 +352,10 @@ async function sendTx() {{
     showMsg('✅ Transaction sent! Hash: ' + txHash, 'ok');
     btn.innerHTML = '✓ Sent';
 
-    // Push tx hash to parent Streamlit via URL param → triggers rerun detection
+    // Push tx hash to parent Streamlit via URL param and force rerun
     const url = new URL(window.parent.location.href);
     url.searchParams.set('tx_hash', txHash);
-    window.parent.history.replaceState({{}}, '', url.toString());
+    window.parent.location.assign(url.toString());
 
     // Also postMessage for instant pickup
     window.parent.postMessage({{type: 'tx_sent', tx_hash: txHash}}, '*');
@@ -402,13 +450,35 @@ st.markdown("<h1 style='text-align:center;'>🚀 IntentChain Middleware Dashboar
 # ── Wallet connection bar ──
 st.markdown("### 🦊 Wallet")
 
+# Hidden bridge input used by wallet_listener JS; completely hidden from UI.
+st.markdown(
+    """
+    <style>
+      div[data-testid="stTextInput"]:has(input[aria-label="wallet_capture"]) {
+        display:none !important;
+      }
+      input[aria-label="wallet_capture"] {
+        display:none !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+st.text_input("wallet_capture", key="wallet_capture", value="", label_visibility="collapsed")
+
+wallet_listener()
+
 metamask_connect_widget(st.session_state.wallet_address)
+
+if st.session_state.get("wallet_capture") and st.session_state.get("wallet_capture") != st.session_state.wallet_address:
+    st.session_state.wallet_address = st.session_state.get("wallet_capture")
+    st.rerun()
 
 # Backwards-compat: keep honoring query param path (older signing widget flow)
 qp = st.query_params
-if "wallet" in qp and not st.session_state.wallet_address:
-  st.session_state.wallet_address = qp["wallet"]
-  st.rerun()
+if "wallet" in qp and qp["wallet"] != st.session_state.wallet_address:
+    st.session_state.wallet_address = qp["wallet"]
+    st.rerun()
 
 # Pick up tx hash from URL query param (set by signing iframe JS)
 if "tx_hash" in qp and st.session_state.pending_sign:
