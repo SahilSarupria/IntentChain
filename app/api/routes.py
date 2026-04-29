@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-
+import traceback
 from app.llm.intent_parser import parse_intent
 from app.services.intent_engine import build_tx_for_wallet
 
@@ -30,7 +30,12 @@ def _detect_missing(parsed: dict) -> list[str]:
     missing = []
     if not parsed.get("action")    or str(parsed["action"]).lower()    in MISSING_SENTINEL:
         missing.append("action")
-    if not parsed.get("amount")    or float(parsed.get("amount", 0))   <= 0:
+    amount = parsed.get("amount", 0)
+    try:
+        amount_val = float(amount)
+        if amount_val <= 0:
+            missing.append("amount")
+    except (ValueError, TypeError):
         missing.append("amount")
     if not parsed.get("recipient") or str(parsed["recipient"]).lower() in MISSING_SENTINEL:
         missing.append("recipient")
@@ -56,9 +61,11 @@ def parse_intent_only(request: PromptRequest):
         missing = _detect_missing(parsed)
         return {"parsed": parsed, "missing_fields": missing}
     except ValueError as exc:
+        traceback.print_exc()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        traceback.print_exc()   # 👈 THIS LINE IS NON-NEGOTIABLE
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.post("/build-tx")

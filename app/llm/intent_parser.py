@@ -44,7 +44,7 @@ User intent: "{user_prompt}"
 
 Return only the JSON object, no additional text."""
 
-    response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
+    response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
 
     # Detect text payload in a few possible field patterns
     raw_text = None

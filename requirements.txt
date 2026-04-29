@@ -5,3 +5,5 @@ python-dotenv
 pydantic
 streamlit
 requests
+spacy
+google-genai
