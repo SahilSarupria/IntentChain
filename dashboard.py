@@ -265,6 +265,8 @@ build();detail();
 def metamask_sign_widget(tx_params: dict, strategy: dict) -> None:
     """
     Renders a self-contained signing panel.
+    Includes client-side chain check: ensures MetaMask is on the correct network
+    before attempting to sign the transaction.
     Calls window.parent.ethereum.request({method:'eth_sendTransaction'}) in the browser.
     On success, posts the tx hash back to Streamlit via the URL param trick.
     The private key never leaves MetaMask.
@@ -323,11 +325,97 @@ def metamask_sign_widget(tx_params: dict, strategy: dict) -> None:
 <script>
 const TX_PARAMS = {tx_json};
 
+// Network names for display
+const CHAIN_ID_NAMES = {{
+  '0xaa36a7': 'Sepolia Testnet',
+  '0x1': 'Ethereum Mainnet',
+  '0x89': 'Polygon',
+  '0xa4b1': 'Arbitrum',
+  '0xa': 'Optimism',
+  '0x38': 'BSC'
+}};
+
+// Chain configuration for adding missing chains to MetaMask
+const CHAIN_CONFIG = {{
+  '0xaa36a7': {{
+    chainName: 'Sepolia Testnet',
+    nativeCurrency: {{ name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 }},
+    rpcUrls: ['https://rpc.sepolia.org/', 'https://sepolia.infura.io/v3/YOUR_INFURA_KEY'],
+    blockExplorerUrls: ['https://sepolia.etherscan.io']
+  }},
+  '0x1': {{
+    chainName: 'Ethereum Mainnet',
+    nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
+    rpcUrls: ['https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY', 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY'],
+    blockExplorerUrls: ['https://etherscan.io']
+  }}
+}};
+
 function showMsg(text, type) {{
   const m = document.getElementById('msg');
   m.className = 'status-msg ' + type;
   m.style.display = 'block';
   m.textContent = text;
+}}
+
+async function ensureChain(desiredChainId) {{
+  if (!desiredChainId || typeof window.parent.ethereum === 'undefined') return;
+  
+  try {{
+    const current = await window.parent.ethereum.request({{ method: 'eth_chainId' }});
+    console.log('Current chainId:', current, 'Desired:', desiredChainId);
+    
+    if (current === desiredChainId) {{
+      console.log('Already on correct chain');
+      return;
+    }}
+    
+    // Try to switch to the desired chain
+    console.log('Attempting to switch to', desiredChainId);
+    showMsg('Switching to ' + (CHAIN_ID_NAMES[desiredChainId] || desiredChainId) + '…', 'info');
+    
+    await window.parent.ethereum.request({{
+      method: 'wallet_switchEthereumChain',
+      params: [{{ chainId: desiredChainId }}],
+    }});
+    
+    console.log('Successfully switched to', desiredChainId);
+    showMsg('✓ Switched to ' + (CHAIN_ID_NAMES[desiredChainId] || desiredChainId), 'ok');
+    
+  }} catch (switchError) {{
+    console.log('Switch error code:', switchError.code);
+    
+    // 4902 = chain not yet added to MetaMask; try to add it
+    if (switchError && switchError.code === 4902) {{
+      try {{
+        console.log('Chain not in MetaMask, attempting to add');
+        const config = CHAIN_CONFIG[desiredChainId];
+        
+        if (config) {{
+          await window.parent.ethereum.request({{
+            method: 'wallet_addEthereumChain',
+            params: [{{
+              chainId: desiredChainId,
+              ...config
+            }}]
+          }});
+          
+          console.log('Added chain, now switching');
+          // Now switch to it
+          await window.parent.ethereum.request({{
+            method: 'wallet_switchEthereumChain',
+            params: [{{ chainId: desiredChainId }}],
+          }});
+        }}
+      }} catch (addErr) {{
+        console.warn('wallet_addEthereumChain failed', addErr);
+        showMsg('ℹ Unable to auto-switch chain. Please manually switch in MetaMask.', 'info');
+      }}
+    }} else {{
+      console.warn('wallet_switchEthereumChain failed', switchError);
+      showMsg('ℹ Please switch to ' + (CHAIN_ID_NAMES[desiredChainId] || desiredChainId) + ' in MetaMask.', 'info');
+    }}
+  }}
 }}
 
 async function sendTx() {{
@@ -343,7 +431,18 @@ async function sendTx() {{
     return;
   }}
 
+  // Ensure we're on the correct chain before sending
+  const desiredChainId = (TX_PARAMS && TX_PARAMS.chainId) ? TX_PARAMS.chainId : '0xaa36a7';
+  console.log('Transaction chainId:', desiredChainId);
+  
   try {{
+    await ensureChain(desiredChainId);
+    
+    // Small delay to let the chain switch take effect
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    showMsg('Sending transaction…', 'info');
+    
     const txHash = await window.parent.ethereum.request({{
       method: 'eth_sendTransaction',
       params: [TX_PARAMS]
