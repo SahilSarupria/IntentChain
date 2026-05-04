@@ -1,11 +1,13 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+import logging
 
 from app.llm.intent_parser import parse_intent
 from app.services.intent_engine import build_tx_for_wallet
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MISSING_SENTINEL = {"none", "", "null", "unknown", "n/a"}
 
@@ -56,6 +58,7 @@ def parse_intent_only(request: PromptRequest):
         missing = _detect_missing(parsed)
         return {"parsed": parsed, "missing_fields": missing}
     except ValueError as exc:
+        logger.warning("/parse-intent validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -77,6 +80,7 @@ def build_tx(request: BuildTxRequest):
         result = build_tx_for_wallet(request.intent, request.from_address)
         return result
     except ValueError as exc:
+        logger.warning("/build-tx validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

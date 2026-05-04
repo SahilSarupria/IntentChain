@@ -17,6 +17,8 @@ for key, default in {
     "show_dialog":      False,
     "tx_params":        None,   # unsigned tx ready for MetaMask
     "strategy":         None,
+  "build_tx_error":   "",    # latest backend /build-tx failure detail
+  "tx_hash_capture":  "",    # tx hash sent from MetaMask iframe bridge
     "pending_sign":     False,  # MetaMask signing widget visible
     "original_prompt":  "",
 }.items():
@@ -129,7 +131,7 @@ async function connectWallet() {{
 def wallet_listener() -> None:
     """
     Listens for wallet postMessage events and hydrates from localStorage on load.
-    Writes the address into a hidden Streamlit text_input so Python can react.
+    Writes wallet/tx data into hidden Streamlit text_inputs so Python can react.
     """
     html = """
 <style>body{margin:0;padding:0}</style>
@@ -160,12 +162,28 @@ window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'wallet_connected') {
     pushWalletToStreamlit(e.data.address);
   }
+  if (e.data && e.data.type === 'tx_sent') {
+    pushTxHashToStreamlit(e.data.tx_hash);
+  }
 });
+
+function pushTxHashToStreamlit(txHash) {
+  if (!txHash) return;
+  try {
+    const inp = window.parent.document.querySelector('input[aria-label="tx_hash_capture"]');
+    if (inp) {
+      inp.value = txHash;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  } catch (e) { /* ignore */ }
+}
 
 // Hydrate wallet after manual refresh/new Streamlit session.
 try {
   const saved = window.parent.localStorage.getItem('intentchain_wallet');
   if (saved) pushWalletToStreamlit(saved);
+  const savedTx = window.parent.localStorage.getItem('intentchain_tx_hash');
+  if (savedTx) pushTxHashToStreamlit(savedTx);
 } catch (e) { /* ignore */ }
 </script>
 """
@@ -451,12 +469,19 @@ async function sendTx() {{
     showMsg('✅ Transaction sent! Hash: ' + txHash, 'ok');
     btn.innerHTML = '✓ Sent';
 
-    // Push tx hash to parent Streamlit via URL param and force rerun
-    const url = new URL(window.parent.location.href);
-    url.searchParams.set('tx_hash', txHash);
-    window.parent.location.assign(url.toString());
+    try {{
+      window.parent.localStorage.setItem('intentchain_tx_hash', txHash);
+    }} catch (e) {{ /* ignore */ }}
 
-    // Also postMessage for instant pickup
+    try {{
+      const txInput = window.parent.document.querySelector('input[aria-label="tx_hash_capture"]');
+      if (txInput) {{
+        txInput.value = txHash;
+        txInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+      }}
+    }} catch (e) {{ /* ignore */ }}
+
+    // Send tx hash to parent Streamlit via message bridge
     window.parent.postMessage({{type: 'tx_sent', tx_hash: txHash}}, '*');
 
   }} catch(e) {{
@@ -556,7 +581,13 @@ st.markdown(
       div[data-testid="stTextInput"]:has(input[aria-label="wallet_capture"]) {
         display:none !important;
       }
+      div[data-testid="stTextInput"]:has(input[aria-label="tx_hash_capture"]) {
+        display:none !important;
+      }
       input[aria-label="wallet_capture"] {
+        display:none !important;
+      }
+      input[aria-label="tx_hash_capture"] {
         display:none !important;
       }
     </style>
@@ -564,6 +595,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.text_input("wallet_capture", key="wallet_capture", value="", label_visibility="collapsed")
+st.text_input("tx_hash_capture", key="tx_hash_capture", value="", label_visibility="collapsed")
 
 wallet_listener()
 
@@ -586,6 +618,25 @@ if "tx_hash" in qp and st.session_state.pending_sign:
     st.session_state.tx_params    = None
     st.session_state.parsed_intent = None
     st.query_params.clear()
+    st.success(f"✅ Transaction broadcast!  Hash: {tx_hash}")
+    st.markdown(f"[View on Etherscan ↗](https://sepolia.etherscan.io/tx/{tx_hash})")
+    st.stop()
+
+# Preferred path: tx hash sent via hidden iframe bridge input
+if st.session_state.get("tx_hash_capture") and st.session_state.pending_sign:
+    tx_hash = st.session_state.get("tx_hash_capture")
+    st.session_state.pending_sign = False
+    st.session_state.tx_params = None
+    st.session_state.parsed_intent = None
+    st.session_state.tx_hash_capture = ""
+    components.html(
+        """
+        <script>
+        try { window.parent.localStorage.removeItem('intentchain_tx_hash'); } catch (e) { /* ignore */ }
+        </script>
+        """,
+        height=0,
+    )
     st.success(f"✅ Transaction broadcast!  Hash: {tx_hash}")
     st.markdown(f"[View on Etherscan ↗](https://sepolia.etherscan.io/tx/{tx_hash})")
     st.stop()
@@ -623,6 +674,7 @@ if execute_btn and user_input.strip():
     st.session_state.pending_sign    = False
     st.session_state.tx_params       = None
     st.session_state.show_dialog     = False
+    st.session_state.build_tx_error = ""
 
     with st.spinner("Parsing intent…"):
         try:
@@ -631,7 +683,7 @@ if execute_btn and user_input.strip():
             st.error(f"Backend unreachable: {exc}")
             st.stop()
 
-    st.session_state.parsed_intent  = data.get("parsed", {})
+    st.session_state.parsed_intent = data.get("parsed", {})
     st.session_state.missing_fields = data.get("missing_fields", [])
 
     if st.session_state.missing_fields:
@@ -648,16 +700,39 @@ if st.session_state.show_dialog:
 if st.session_state.pending_sign and st.session_state.parsed_intent and not st.session_state.tx_params:
     with st.spinner("Building unsigned transaction…"):
         try:
-            result = requests.post(BUILD_URL, json={
+            response = requests.post(BUILD_URL, json={
                 "intent":       st.session_state.parsed_intent,
                 "from_address": st.session_state.wallet_address,
-            }, timeout=30).json()
+            }, timeout=30)
+
+            if not response.ok:
+                detail = "Unknown build error"
+                try:
+                    payload = response.json()
+                    detail = payload.get("detail", detail)
+                except Exception:
+                    detail = response.text or detail
+
+                st.session_state.build_tx_error = str(detail)
+                st.session_state.pending_sign = False
+                st.session_state.tx_params = None
+                st.rerun()
+
+            result = response.json()
         except Exception as exc:
-            st.error(f"Backend error: {exc}")
+            st.session_state.build_tx_error = f"Backend error: {exc}"
+            st.session_state.pending_sign = False
             st.stop()
     st.session_state.tx_params = result.get("tx_params")
     st.session_state.strategy  = result.get("strategy")
     st.rerun()
+
+if st.session_state.get("build_tx_error"):
+    st.error(f"Build transaction failed: {st.session_state.build_tx_error}")
+    if st.button("Try Build Again", key="retry_build_tx"):
+        st.session_state.build_tx_error = ""
+        st.session_state.pending_sign = True
+        st.rerun()
 
 if st.session_state.pending_sign and st.session_state.tx_params:
     st.markdown("### ✍️ Sign Transaction")
