@@ -355,7 +355,11 @@ async function sendTx() {{
     // Push tx hash to parent Streamlit via URL param and force rerun
     const url = new URL(window.parent.location.href);
     url.searchParams.set('tx_hash', txHash);
+<<<<<<< HEAD
     window.parent.postMessage({{type: 'tx_sent', tx_hash: txHash}}, '*');
+=======
+    window.parent.location.assign(url.toString());
+>>>>>>> c9edd7931d4931ca04e4ee9b81d24ba0f31ccfba
 
     // Also postMessage for instant pickup
     window.parent.postMessage({{type: 'tx_sent', tx_hash: txHash}}, '*');
