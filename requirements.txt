@@ -6,4 +6,4 @@ pydantic
 streamlit
 requests
 spacy
-google-genai
+google-generativeai

@@ -1,18 +1,19 @@
 from app.services.strategy_engine import evaluate_strategy
-from app.blockchain.executor import build_unsigned_tx
+from app.services.tx_builder import build_unsigned_tx
 
 
-def build_tx_for_wallet(intent_dict: dict, from_address: str) -> dict:
+def build_tx_for_wallet(intent: dict, from_address: str) -> dict:
     """
-    Evaluate strategy and build an unsigned transaction.
-    Called after MetaMask wallet address is known.
-    Returns tx_params (for MetaMask) + strategy metadata.
+    Build an unsigned tx ready for MetaMask, for any supported intent action
+    (native transfer, ERC-20 transfer/approve, or supply-chain contract call).
+    Returns tx_params + strategy metadata (including the full fastest /
+    standard / cheapest gas-tier comparison for the UI).
     """
-    strategy  = evaluate_strategy(intent_dict, from_address=from_address)
-    tx_params = build_unsigned_tx(intent_dict, strategy, from_address)
+    network = intent.get("network")
+    strategy = evaluate_strategy(intent, from_address, network=network)
+    tx_params = build_unsigned_tx(intent, strategy, from_address)
 
     return {
-        "intent":    intent_dict,
+        "tx_params": tx_params,
         "strategy":  strategy,
-        "tx_params": tx_params,   # handed to MetaMask for signing + broadcast
     }
