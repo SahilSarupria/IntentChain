@@ -185,6 +185,20 @@ try {
   const savedTx = window.parent.localStorage.getItem('intentchain_tx_hash');
   if (savedTx) pushTxHashToStreamlit(savedTx);
 } catch (e) { /* ignore */ }
+
+// Poll parent localStorage for a tx hash as a robust fallback (every 1s)
+try {
+  let __last_seen_tx = null;
+  setInterval(() => {
+    try {
+      const v = window.parent.localStorage.getItem('intentchain_tx_hash');
+      if (v && v !== __last_seen_tx) {
+        __last_seen_tx = v;
+        pushTxHashToStreamlit(v);
+      }
+    } catch (e) { /* ignore */ }
+  }, 1000);
+} catch (e) { /* ignore */ }
 </script>
 """
     components.html(html, height=0, scrolling=False)
@@ -481,6 +495,13 @@ async function sendTx() {{
       }}
     }} catch (e) {{ /* ignore */ }}
 
+    // Also update parent URL without navigating as a reliable fallback
+    try {{
+      const url = new URL(window.parent.location.href);
+      url.searchParams.set('tx_hash', txHash);
+      window.parent.history.replaceState({{}}, '', url.toString());
+    }} catch (e) {{ /* ignore */ }}
+
     // Send tx hash to parent Streamlit via message bridge
     window.parent.postMessage({{type: 'tx_sent', tx_hash: txHash}}, '*');
 
@@ -596,6 +617,35 @@ st.markdown(
 )
 st.text_input("wallet_capture", key="wallet_capture", value="", label_visibility="collapsed")
 st.text_input("tx_hash_capture", key="tx_hash_capture", value="", label_visibility="collapsed")
+
+# Parent-level bridge: listens for postMessage events on the main page and writes
+# the tx hash into parent localStorage and the hidden Streamlit input. This
+# ensures messages from the signing iframe are captured even if other cross-
+# frame paths are blocked.
+components.html("""
+<script>
+window.addEventListener('message', function(e) {
+  try {
+    if (e.data && e.data.type === 'tx_sent') {
+      var tx = e.data.tx_hash;
+      try { window.localStorage.setItem('intentchain_tx_hash', tx); } catch (err) { /* ignore */ }
+      try {
+        var inp = document.querySelector('input[aria-label="tx_hash_capture"]');
+        if (inp) { inp.value = tx; inp.dispatchEvent(new Event('input', { bubbles: true })); }
+      } catch (err) { /* ignore */ }
+    }
+    if (e.data && e.data.type === 'wallet_connected') {
+      var addr = e.data.address;
+      try { window.localStorage.setItem('intentchain_wallet', addr); } catch (err) { /* ignore */ }
+      try {
+        var wininp = document.querySelector('input[aria-label="wallet_capture"]');
+        if (wininp) { wininp.value = addr; wininp.dispatchEvent(new Event('input', { bubbles: true })); }
+      } catch (err) { /* ignore */ }
+    }
+  } catch (err) { /* ignore */ }
+}, false);
+</script>
+""", height=0, scrolling=False)
 
 wallet_listener()
 
@@ -738,3 +788,14 @@ if st.session_state.pending_sign and st.session_state.tx_params:
     st.markdown("### ✍️ Sign Transaction")
     st.caption("Review the transaction details below, then approve in MetaMask. Your private key never leaves your browser.")
     metamask_sign_widget(st.session_state.tx_params, st.session_state.strategy or {})
+
+# Debugging panel: show key session values to help diagnose tx bridge issues
+with st.expander("Debug — session state (for troubleshooting)", expanded=False):
+  st.write({
+    "wallet_address": st.session_state.get("wallet_address"),
+    "wallet_capture": st.session_state.get("wallet_capture"),
+    "pending_sign": st.session_state.get("pending_sign"),
+    "tx_params_present": bool(st.session_state.get("tx_params")),
+    "tx_hash_capture": st.session_state.get("tx_hash_capture"),
+    "build_tx_error": st.session_state.get("build_tx_error"),
+  })
