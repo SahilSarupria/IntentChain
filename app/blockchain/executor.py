@@ -1,16 +1,14 @@
-from web3 import Web3
-import os
-from dotenv import load_dotenv
+"""
+IntentChain — Legacy native-transfer executor.
 
-load_dotenv()
-
-INFURA_URL = os.getenv("INFURA_URL")
-# ✅ PRIVATE_KEY removed — signing now happens in the browser via MetaMask
-# ✅ WALLET_ADDRESS removed — comes from the connected MetaMask wallet at runtime
-
-w3 = Web3(Web3.HTTPProvider(INFURA_URL))
-
-print("Loaded INFURA:", INFURA_URL)
+Superseded by app/services/tx_builder.py, which handles native transfers,
+ERC-20 transfers/approvals, and supply-chain contract calls through one
+dispatch path with shared fee logic. This module is kept as a thin,
+backwards-compatible shim in case anything external still imports it
+directly.
+"""
+from app.blockchain.rpc import get_w3
+from app.services.tx_builder import build_unsigned_tx as _build_unsigned_tx
 
 # Network name to chain ID mapping
 NETWORK_CHAIN_IDS = {
@@ -24,11 +22,9 @@ NETWORK_CHAIN_IDS = {
 
 
 def get_priority_fee(priority: str) -> int:
-    if priority == "fast":
-        return w3.to_wei(3, "gwei")
-    if priority == "low_cost":
-        return w3.to_wei(1, "gwei")
-    return w3.to_wei(2, "gwei")
+    w3 = get_w3("sepolia")
+    fees = {"fast": 3, "low_cost": 1}
+    return w3.to_wei(fees.get(priority, 2), "gwei")
 
 
 def build_unsigned_tx(intent: dict, strategy: dict, from_address: str) -> dict:
