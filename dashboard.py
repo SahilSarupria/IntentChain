@@ -1,4 +1,4 @@
-import streamlit as st
+'''import streamlit as st
 import requests
 import json
 import streamlit.components.v1 as components
@@ -27,13 +27,21 @@ for key, default in {
 
 # ── field metadata ─────────────────────────────────────────────────────────
 FIELD_META = {
-    "action":    {"label":"Action",           "type":"select",  "options":["transfer","send","swap","bridge"],           "hint":""},
-    "amount":    {"label":"Amount (ETH)",      "type":"number",  "hint":"e.g. 0.002"},
-    "recipient": {"label":"Recipient Address", "type":"text",    "hint":"e.g. 0xABC123…"},
-    "network":   {"label":"Network",           "type":"select",  "options":["sepolia","ethereum","polygon","arbitrum","optimism","bsc"], "hint":""},
-    "priority":  {"label":"Priority",          "type":"select",  "options":["low_cost","normal","fast"],                 "hint":""},
+  "action":        {"label":"Action",           "type":"select",  "options":["transfer","send","bridge","transfer_token","send_token","approve_token","check_balance","get_history","register_product","log_checkpoint","verify_product","swap"], "hint":""},
+  "token":         {"label":"Token",            "type":"text",    "hint":"e.g. ETH, USDC, or a token contract address"},
+  "amount":        {"label":"Amount",           "type":"number",  "hint":"e.g. 0.002"},
+  "recipient":     {"label":"Recipient Address", "type":"text",    "hint":"e.g. 0xABC123…"},
+  "spender":       {"label":"Spender Address",   "type":"text",    "hint":"e.g. 0xABC123…"},
+  "network":       {"label":"Network",           "type":"select",  "options":["sepolia","ethereum","polygon","arbitrum","optimism","bsc"], "hint":""},
+  "priority":      {"label":"Priority",          "type":"select",  "options":["low_cost","normal","fast"], "hint":""},
+  "product_id":    {"label":"Product ID",        "type":"text",    "hint":"e.g. COFFEE-BATCH-A123"},
+  "name":          {"label":"Product Name",      "type":"text",    "hint":"e.g. Fair-trade coffee batch"},
+  "origin":        {"label":"Origin",            "type":"text",    "hint":"e.g. Huila, Colombia"},
+  "location":      {"label":"Location",          "type":"text",    "hint":"e.g. Rotterdam Port"},
+  "status":        {"label":"Status",            "type":"text",    "hint":"e.g. In Transit"},
+  "temperature_c": {"label":"Temperature (°C)",   "type":"number",  "hint":"e.g. 4"},
 }
-FIELD_ICONS = {"action":"⚡","amount":"💰","recipient":"📬","network":"🌐","priority":"🚀"}
+FIELD_ICONS = {"action":"⚡","token":"🪙","amount":"💰","recipient":"📬","spender":"🔐","network":"🌐","priority":"🚀","product_id":"📦","name":"🏷️","origin":"🗺️","location":"📍","status":"📝","temperature_c":"🌡️"}
 
 # ══════════════════════════════════════════════════════════════════════════
 # SHARED STYLES
@@ -798,4 +806,4 @@ with st.expander("Debug — session state (for troubleshooting)", expanded=False
     "tx_params_present": bool(st.session_state.get("tx_params")),
     "tx_hash_capture": st.session_state.get("tx_hash_capture"),
     "build_tx_error": st.session_state.get("build_tx_error"),
-  })
+  })'''
