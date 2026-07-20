@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
+from typing import Optional
+import logging
 import time
 import os
 
@@ -14,6 +16,7 @@ from app.services import contract_registry
 from app.config.networks import list_networks, normalize_network, get_network_config
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MISSING_SENTINEL = {"none", "", "null", "unknown", "n/a", "0"}
 
@@ -248,6 +251,7 @@ async def supply_chain_register(req: SupplyChainRegisterRequest):
         log_event("supply_chain_register", {"status": "success", "network": req.network, "product_id": req.product_id})
         return result
     except ValueError as exc:
+        logger.warning("/build-tx validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

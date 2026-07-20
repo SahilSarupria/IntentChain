@@ -1,4 +1,4 @@
-import streamlit as st
+'''import streamlit as st
 import requests
 import json
 import streamlit.components.v1 as components
@@ -17,6 +17,8 @@ for key, default in {
     "show_dialog":      False,
     "tx_params":        None,   # unsigned tx ready for MetaMask
     "strategy":         None,
+  "build_tx_error":   "",    # latest backend /build-tx failure detail
+  "tx_hash_capture":  "",    # tx hash sent from MetaMask iframe bridge
     "pending_sign":     False,  # MetaMask signing widget visible
     "original_prompt":  "",
 }.items():
@@ -25,13 +27,21 @@ for key, default in {
 
 # ── field metadata ─────────────────────────────────────────────────────────
 FIELD_META = {
-    "action":    {"label":"Action",           "type":"select",  "options":["transfer","send","swap","bridge"],           "hint":""},
-    "amount":    {"label":"Amount (ETH)",      "type":"number",  "hint":"e.g. 0.002"},
-    "recipient": {"label":"Recipient Address", "type":"text",    "hint":"e.g. 0xABC123…"},
-    "network":   {"label":"Network",           "type":"select",  "options":["sepolia","ethereum","polygon","arbitrum","optimism","bsc"], "hint":""},
-    "priority":  {"label":"Priority",          "type":"select",  "options":["low_cost","normal","fast"],                 "hint":""},
+  "action":        {"label":"Action",           "type":"select",  "options":["transfer","send","bridge","transfer_token","send_token","approve_token","check_balance","get_history","register_product","log_checkpoint","verify_product","swap"], "hint":""},
+  "token":         {"label":"Token",            "type":"text",    "hint":"e.g. ETH, USDC, or a token contract address"},
+  "amount":        {"label":"Amount",           "type":"number",  "hint":"e.g. 0.002"},
+  "recipient":     {"label":"Recipient Address", "type":"text",    "hint":"e.g. 0xABC123…"},
+  "spender":       {"label":"Spender Address",   "type":"text",    "hint":"e.g. 0xABC123…"},
+  "network":       {"label":"Network",           "type":"select",  "options":["sepolia","ethereum","polygon","arbitrum","optimism","bsc"], "hint":""},
+  "priority":      {"label":"Priority",          "type":"select",  "options":["low_cost","normal","fast"], "hint":""},
+  "product_id":    {"label":"Product ID",        "type":"text",    "hint":"e.g. COFFEE-BATCH-A123"},
+  "name":          {"label":"Product Name",      "type":"text",    "hint":"e.g. Fair-trade coffee batch"},
+  "origin":        {"label":"Origin",            "type":"text",    "hint":"e.g. Huila, Colombia"},
+  "location":      {"label":"Location",          "type":"text",    "hint":"e.g. Rotterdam Port"},
+  "status":        {"label":"Status",            "type":"text",    "hint":"e.g. In Transit"},
+  "temperature_c": {"label":"Temperature (°C)",   "type":"number",  "hint":"e.g. 4"},
 }
-FIELD_ICONS = {"action":"⚡","amount":"💰","recipient":"📬","network":"🌐","priority":"🚀"}
+FIELD_ICONS = {"action":"⚡","token":"🪙","amount":"💰","recipient":"📬","spender":"🔐","network":"🌐","priority":"🚀","product_id":"📦","name":"🏷️","origin":"🗺️","location":"📍","status":"📝","temperature_c":"🌡️"}
 
 # ══════════════════════════════════════════════════════════════════════════
 # SHARED STYLES
@@ -129,7 +139,7 @@ async function connectWallet() {{
 def wallet_listener() -> None:
     """
     Listens for wallet postMessage events and hydrates from localStorage on load.
-    Writes the address into a hidden Streamlit text_input so Python can react.
+    Writes wallet/tx data into hidden Streamlit text_inputs so Python can react.
     """
     html = """
 <style>body{margin:0;padding:0}</style>
@@ -160,12 +170,42 @@ window.addEventListener('message', function(e) {
   if (e.data && e.data.type === 'wallet_connected') {
     pushWalletToStreamlit(e.data.address);
   }
+  if (e.data && e.data.type === 'tx_sent') {
+    pushTxHashToStreamlit(e.data.tx_hash);
+  }
 });
+
+function pushTxHashToStreamlit(txHash) {
+  if (!txHash) return;
+  try {
+    const inp = window.parent.document.querySelector('input[aria-label="tx_hash_capture"]');
+    if (inp) {
+      inp.value = txHash;
+      inp.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+  } catch (e) { /* ignore */ }
+}
 
 // Hydrate wallet after manual refresh/new Streamlit session.
 try {
   const saved = window.parent.localStorage.getItem('intentchain_wallet');
   if (saved) pushWalletToStreamlit(saved);
+  const savedTx = window.parent.localStorage.getItem('intentchain_tx_hash');
+  if (savedTx) pushTxHashToStreamlit(savedTx);
+} catch (e) { /* ignore */ }
+
+// Poll parent localStorage for a tx hash as a robust fallback (every 1s)
+try {
+  let __last_seen_tx = null;
+  setInterval(() => {
+    try {
+      const v = window.parent.localStorage.getItem('intentchain_tx_hash');
+      if (v && v !== __last_seen_tx) {
+        __last_seen_tx = v;
+        pushTxHashToStreamlit(v);
+      }
+    } catch (e) { /* ignore */ }
+  }, 1000);
 } catch (e) { /* ignore */ }
 </script>
 """
@@ -265,6 +305,8 @@ build();detail();
 def metamask_sign_widget(tx_params: dict, strategy: dict) -> None:
     """
     Renders a self-contained signing panel.
+    Includes client-side chain check: ensures MetaMask is on the correct network
+    before attempting to sign the transaction.
     Calls window.parent.ethereum.request({method:'eth_sendTransaction'}) in the browser.
     On success, posts the tx hash back to Streamlit via the URL param trick.
     The private key never leaves MetaMask.
@@ -323,11 +365,97 @@ def metamask_sign_widget(tx_params: dict, strategy: dict) -> None:
 <script>
 const TX_PARAMS = {tx_json};
 
+// Network names for display
+const CHAIN_ID_NAMES = {{
+  '0xaa36a7': 'Sepolia Testnet',
+  '0x1': 'Ethereum Mainnet',
+  '0x89': 'Polygon',
+  '0xa4b1': 'Arbitrum',
+  '0xa': 'Optimism',
+  '0x38': 'BSC'
+}};
+
+// Chain configuration for adding missing chains to MetaMask
+const CHAIN_CONFIG = {{
+  '0xaa36a7': {{
+    chainName: 'Sepolia Testnet',
+    nativeCurrency: {{ name: 'Sepolia Ether', symbol: 'ETH', decimals: 18 }},
+    rpcUrls: ['https://rpc.sepolia.org/', 'https://sepolia.infura.io/v3/YOUR_INFURA_KEY'],
+    blockExplorerUrls: ['https://sepolia.etherscan.io']
+  }},
+  '0x1': {{
+    chainName: 'Ethereum Mainnet',
+    nativeCurrency: {{ name: 'Ether', symbol: 'ETH', decimals: 18 }},
+    rpcUrls: ['https://eth-mainnet.alchemyapi.io/v2/YOUR_KEY', 'https://mainnet.infura.io/v3/YOUR_INFURA_KEY'],
+    blockExplorerUrls: ['https://etherscan.io']
+  }}
+}};
+
 function showMsg(text, type) {{
   const m = document.getElementById('msg');
   m.className = 'status-msg ' + type;
   m.style.display = 'block';
   m.textContent = text;
+}}
+
+async function ensureChain(desiredChainId) {{
+  if (!desiredChainId || typeof window.parent.ethereum === 'undefined') return;
+  
+  try {{
+    const current = await window.parent.ethereum.request({{ method: 'eth_chainId' }});
+    console.log('Current chainId:', current, 'Desired:', desiredChainId);
+    
+    if (current === desiredChainId) {{
+      console.log('Already on correct chain');
+      return;
+    }}
+    
+    // Try to switch to the desired chain
+    console.log('Attempting to switch to', desiredChainId);
+    showMsg('Switching to ' + (CHAIN_ID_NAMES[desiredChainId] || desiredChainId) + '…', 'info');
+    
+    await window.parent.ethereum.request({{
+      method: 'wallet_switchEthereumChain',
+      params: [{{ chainId: desiredChainId }}],
+    }});
+    
+    console.log('Successfully switched to', desiredChainId);
+    showMsg('✓ Switched to ' + (CHAIN_ID_NAMES[desiredChainId] || desiredChainId), 'ok');
+    
+  }} catch (switchError) {{
+    console.log('Switch error code:', switchError.code);
+    
+    // 4902 = chain not yet added to MetaMask; try to add it
+    if (switchError && switchError.code === 4902) {{
+      try {{
+        console.log('Chain not in MetaMask, attempting to add');
+        const config = CHAIN_CONFIG[desiredChainId];
+        
+        if (config) {{
+          await window.parent.ethereum.request({{
+            method: 'wallet_addEthereumChain',
+            params: [{{
+              chainId: desiredChainId,
+              ...config
+            }}]
+          }});
+          
+          console.log('Added chain, now switching');
+          // Now switch to it
+          await window.parent.ethereum.request({{
+            method: 'wallet_switchEthereumChain',
+            params: [{{ chainId: desiredChainId }}],
+          }});
+        }}
+      }} catch (addErr) {{
+        console.warn('wallet_addEthereumChain failed', addErr);
+        showMsg('ℹ Unable to auto-switch chain. Please manually switch in MetaMask.', 'info');
+      }}
+    }} else {{
+      console.warn('wallet_switchEthereumChain failed', switchError);
+      showMsg('ℹ Please switch to ' + (CHAIN_ID_NAMES[desiredChainId] || desiredChainId) + ' in MetaMask.', 'info');
+    }}
+  }}
 }}
 
 async function sendTx() {{
@@ -343,7 +471,18 @@ async function sendTx() {{
     return;
   }}
 
+  // Ensure we're on the correct chain before sending
+  const desiredChainId = (TX_PARAMS && TX_PARAMS.chainId) ? TX_PARAMS.chainId : '0xaa36a7';
+  console.log('Transaction chainId:', desiredChainId);
+  
   try {{
+    await ensureChain(desiredChainId);
+    
+    // Small delay to let the chain switch take effect
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    showMsg('Sending transaction…', 'info');
+    
     const txHash = await window.parent.ethereum.request({{
       method: 'eth_sendTransaction',
       params: [TX_PARAMS]
@@ -352,12 +491,26 @@ async function sendTx() {{
     showMsg('✅ Transaction sent! Hash: ' + txHash, 'ok');
     btn.innerHTML = '✓ Sent';
 
-    // Push tx hash to parent Streamlit via URL param and force rerun
-    const url = new URL(window.parent.location.href);
-    url.searchParams.set('tx_hash', txHash);
-    window.parent.location.assign(url.toString());
+    try {{
+      window.parent.localStorage.setItem('intentchain_tx_hash', txHash);
+    }} catch (e) {{ /* ignore */ }}
 
-    // Also postMessage for instant pickup
+    try {{
+      const txInput = window.parent.document.querySelector('input[aria-label="tx_hash_capture"]');
+      if (txInput) {{
+        txInput.value = txHash;
+        txInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+      }}
+    }} catch (e) {{ /* ignore */ }}
+
+    // Also update parent URL without navigating as a reliable fallback
+    try {{
+      const url = new URL(window.parent.location.href);
+      url.searchParams.set('tx_hash', txHash);
+      window.parent.history.replaceState({{}}, '', url.toString());
+    }} catch (e) {{ /* ignore */ }}
+
+    // Send tx hash to parent Streamlit via message bridge
     window.parent.postMessage({{type: 'tx_sent', tx_hash: txHash}}, '*');
 
   }} catch(e) {{
@@ -457,7 +610,13 @@ st.markdown(
       div[data-testid="stTextInput"]:has(input[aria-label="wallet_capture"]) {
         display:none !important;
       }
+      div[data-testid="stTextInput"]:has(input[aria-label="tx_hash_capture"]) {
+        display:none !important;
+      }
       input[aria-label="wallet_capture"] {
+        display:none !important;
+      }
+      input[aria-label="tx_hash_capture"] {
         display:none !important;
       }
     </style>
@@ -465,6 +624,36 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.text_input("wallet_capture", key="wallet_capture", value="", label_visibility="collapsed")
+st.text_input("tx_hash_capture", key="tx_hash_capture", value="", label_visibility="collapsed")
+
+# Parent-level bridge: listens for postMessage events on the main page and writes
+# the tx hash into parent localStorage and the hidden Streamlit input. This
+# ensures messages from the signing iframe are captured even if other cross-
+# frame paths are blocked.
+components.html("""
+<script>
+window.addEventListener('message', function(e) {
+  try {
+    if (e.data && e.data.type === 'tx_sent') {
+      var tx = e.data.tx_hash;
+      try { window.localStorage.setItem('intentchain_tx_hash', tx); } catch (err) { /* ignore */ }
+      try {
+        var inp = document.querySelector('input[aria-label="tx_hash_capture"]');
+        if (inp) { inp.value = tx; inp.dispatchEvent(new Event('input', { bubbles: true })); }
+      } catch (err) { /* ignore */ }
+    }
+    if (e.data && e.data.type === 'wallet_connected') {
+      var addr = e.data.address;
+      try { window.localStorage.setItem('intentchain_wallet', addr); } catch (err) { /* ignore */ }
+      try {
+        var wininp = document.querySelector('input[aria-label="wallet_capture"]');
+        if (wininp) { wininp.value = addr; wininp.dispatchEvent(new Event('input', { bubbles: true })); }
+      } catch (err) { /* ignore */ }
+    }
+  } catch (err) { /* ignore */ }
+}, false);
+</script>
+""", height=0, scrolling=False)
 
 wallet_listener()
 
@@ -487,6 +676,25 @@ if "tx_hash" in qp and st.session_state.pending_sign:
     st.session_state.tx_params    = None
     st.session_state.parsed_intent = None
     st.query_params.clear()
+    st.success(f"✅ Transaction broadcast!  Hash: {tx_hash}")
+    st.markdown(f"[View on Etherscan ↗](https://sepolia.etherscan.io/tx/{tx_hash})")
+    st.stop()
+
+# Preferred path: tx hash sent via hidden iframe bridge input
+if st.session_state.get("tx_hash_capture") and st.session_state.pending_sign:
+    tx_hash = st.session_state.get("tx_hash_capture")
+    st.session_state.pending_sign = False
+    st.session_state.tx_params = None
+    st.session_state.parsed_intent = None
+    st.session_state.tx_hash_capture = ""
+    components.html(
+        """
+        <script>
+        try { window.parent.localStorage.removeItem('intentchain_tx_hash'); } catch (e) { /* ignore */ }
+        </script>
+        """,
+        height=0,
+    )
     st.success(f"✅ Transaction broadcast!  Hash: {tx_hash}")
     st.markdown(f"[View on Etherscan ↗](https://sepolia.etherscan.io/tx/{tx_hash})")
     st.stop()
@@ -524,6 +732,7 @@ if execute_btn and user_input.strip():
     st.session_state.pending_sign    = False
     st.session_state.tx_params       = None
     st.session_state.show_dialog     = False
+    st.session_state.build_tx_error = ""
 
     with st.spinner("Parsing intent…"):
         try:
@@ -532,7 +741,7 @@ if execute_btn and user_input.strip():
             st.error(f"Backend unreachable: {exc}")
             st.stop()
 
-    st.session_state.parsed_intent  = data.get("parsed", {})
+    st.session_state.parsed_intent = data.get("parsed", {})
     st.session_state.missing_fields = data.get("missing_fields", [])
 
     if st.session_state.missing_fields:
@@ -549,18 +758,52 @@ if st.session_state.show_dialog:
 if st.session_state.pending_sign and st.session_state.parsed_intent and not st.session_state.tx_params:
     with st.spinner("Building unsigned transaction…"):
         try:
-            result = requests.post(BUILD_URL, json={
+            response = requests.post(BUILD_URL, json={
                 "intent":       st.session_state.parsed_intent,
                 "from_address": st.session_state.wallet_address,
-            }, timeout=30).json()
+            }, timeout=30)
+
+            if not response.ok:
+                detail = "Unknown build error"
+                try:
+                    payload = response.json()
+                    detail = payload.get("detail", detail)
+                except Exception:
+                    detail = response.text or detail
+
+                st.session_state.build_tx_error = str(detail)
+                st.session_state.pending_sign = False
+                st.session_state.tx_params = None
+                st.rerun()
+
+            result = response.json()
         except Exception as exc:
-            st.error(f"Backend error: {exc}")
+            st.session_state.build_tx_error = f"Backend error: {exc}"
+            st.session_state.pending_sign = False
             st.stop()
     st.session_state.tx_params = result.get("tx_params")
     st.session_state.strategy  = result.get("strategy")
     st.rerun()
 
+if st.session_state.get("build_tx_error"):
+    st.error(f"Build transaction failed: {st.session_state.build_tx_error}")
+    if st.button("Try Build Again", key="retry_build_tx"):
+        st.session_state.build_tx_error = ""
+        st.session_state.pending_sign = True
+        st.rerun()
+
 if st.session_state.pending_sign and st.session_state.tx_params:
     st.markdown("### ✍️ Sign Transaction")
     st.caption("Review the transaction details below, then approve in MetaMask. Your private key never leaves your browser.")
     metamask_sign_widget(st.session_state.tx_params, st.session_state.strategy or {})
+
+# Debugging panel: show key session values to help diagnose tx bridge issues
+with st.expander("Debug — session state (for troubleshooting)", expanded=False):
+  st.write({
+    "wallet_address": st.session_state.get("wallet_address"),
+    "wallet_capture": st.session_state.get("wallet_capture"),
+    "pending_sign": st.session_state.get("pending_sign"),
+    "tx_params_present": bool(st.session_state.get("tx_params")),
+    "tx_hash_capture": st.session_state.get("tx_hash_capture"),
+    "build_tx_error": st.session_state.get("build_tx_error"),
+  })'''
