@@ -86,6 +86,7 @@ def build_unsigned_tx(intent: dict, strategy: dict, from_address: str) -> dict:
             batch_id=str(intent.get("product_id") or intent.get("batch_id") or intent.get("recipient") or ""),
             name=str(intent.get("name") or intent.get("token") or "Unnamed product"),
             origin=str(intent.get("origin") or "Unspecified"),
+            contract_address=intent.get("contract_address") or None,
         )
         tx["gas"] = hex(estimate_gas(w3, {k: v for k, v in tx.items() if k != "meta"}, DEFAULT_GAS["contract_write"]))
 
@@ -96,6 +97,7 @@ def build_unsigned_tx(intent: dict, strategy: dict, from_address: str) -> dict:
             location=str(intent.get("location") or "Unspecified"),
             status=str(intent.get("status") or "In Transit"),
             temperature_c=int(float(intent.get("temperature_c") or 0)),
+            contract_address=intent.get("contract_address") or None,
         )
         tx["gas"] = hex(estimate_gas(w3, {k: v for k, v in tx.items() if k != "meta"}, DEFAULT_GAS["contract_write"]))
 

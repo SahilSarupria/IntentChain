@@ -678,6 +678,21 @@ body::before {
 .sc-checkpoint-item { padding: 7px 9px; border-left: 2px solid var(--teal); background: var(--surface); margin-bottom: 5px; border-radius: 0 6px 6px 0; }
 .sc-checkpoint-item .cp-loc { font-family: var(--mono); font-size: 10.5px; color: var(--text); }
 .sc-checkpoint-item .cp-meta { font-family: var(--mono); font-size: 9px; color: var(--dim); margin-top: 2px; }
+.sc-contract-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); margin-bottom: 5px; font-family: var(--mono); font-size: 9.5px;
+}
+.sc-contract-row.active { border-color: var(--teal); }
+.sc-contract-row .scc-addr { color: var(--text); }
+.sc-contract-row .scc-label { color: var(--dim); font-size: 8.5px; }
+.sc-contract-row .scc-actions { display: flex; gap: 4px; }
+.scc-btn {
+  background: none; border: 1px solid var(--border2); color: var(--muted);
+  border-radius: 4px; font-family: var(--mono); font-size: 8.5px; padding: 2px 6px; cursor: pointer;
+}
+.scc-btn:hover { color: var(--amber2); border-color: var(--amber-glow); }
+.sc-deploy-help:hover { color: var(--amber2) !important; }
 </style>
 </head>
 <body>
@@ -848,6 +863,28 @@ body::before {
 
       <!-- SUPPLY CHAIN -->
       <div class="insights-pane" id="pane-supplychain">
+
+        <div class="sc-section-title">🔐 My Private Contract</div>
+        <div id="scActiveContract" class="ins-empty" style="padding:14px 8px;">Connect your wallet to manage your private contract.</div>
+        <div class="sc-form">
+          <label>CONTRACT ADDRESS</label>
+          <input id="scRegistryAddr" placeholder="0x… (your deployed SupplyChainTraceability contract)">
+          <label>LABEL (optional)</label>
+          <input id="scRegistryLabel" placeholder="Acme Coffee Co. — Sepolia">
+          <button class="ins-btn" onclick="scRegisterContract()">Register This Contract To My Wallet</button>
+        </div>
+        <div id="scMyContracts"></div>
+        <div class="sc-deploy-help" onclick="toggleDeployHelp()" style="cursor:pointer;font-family:var(--mono);font-size:9.5px;color:var(--dim);margin:8px 0;">
+          ▸ Don't have a contract yet? Deploy your own (click to expand)
+        </div>
+        <div id="scDeployHelp" style="display:none;font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.6;margin-bottom:6px;">
+          This app never deploys contracts on your behalf — you stay in control of your own private
+          instance. Deploy <code>SupplyChainTraceability.sol</code> yourself (e.g. paste it into
+          <a href="https://remix.ethereum.org" target="_blank" style="color:var(--blue);">Remix</a>,
+          compile, and deploy with your wallet), then paste the resulting address above.
+          <button class="ins-refresh" style="margin-top:6px;" onclick="copyContractSource()">📋 Copy contract source (.sol)</button>
+        </div>
+
         <div class="sc-section-title">📦 Register Product Batch</div>
         <div class="sc-form">
           <label>BATCH / SKU ID</label>
@@ -879,6 +916,8 @@ body::before {
         <div class="sc-form">
           <label>BATCH / SKU ID</label>
           <input id="scLookupId" placeholder="COFFEE-BATCH-A123">
+          <label>CONTRACT ADDRESS (optional — defaults to your registered contract)</label>
+          <input id="scLookupContract" placeholder="0x… leave blank to use your contract">
           <button class="ins-btn" onclick="scLookup()">Look Up Provenance</button>
         </div>
         <div id="scResult"></div>
@@ -1074,6 +1113,7 @@ async function connectWallet() {
     localStorage.setItem('ic_wallet', accounts[0]);
     updateWalletUI();
     fetchBalances();
+    if (state.insightsTab === 'supplychain') fetchMyContracts();
     createAiMsg(`<span style="color:var(--teal)">✓ Wallet connected</span> &mdash; <code style="font-size:12px;color:var(--amber2)">${accounts[0].slice(0,10)}…${accounts[0].slice(-6)}</code><br><br>You're ready to submit blockchain intents. Just describe what you want to do.`);
   } catch(e) {
     createAiMsg(`<span style="color:var(--red)">❌ Connection failed:</span> ${esc(e.message || 'Rejected by user')}`);
@@ -1321,11 +1361,26 @@ async function signWithMetaMask(btn) {
 
   } catch(e) {
     const rejected = e.code === 4001;
+    const insufficientFunds = /insufficient funds/i.test(e.message || '');
     btn.disabled = false;
     btn.innerHTML = '🦊 Sign &amp; Send with MetaMask';
     const errDiv = document.createElement('div');
     errDiv.className = 'i-alert err'; errDiv.style.marginTop = '8px';
-    errDiv.textContent = rejected ? '❌ Transaction rejected by user.' : '❌ ' + (e.message || 'Unknown error');
+
+    if (rejected) {
+      errDiv.textContent = '❌ Transaction rejected by user.';
+    } else if (insufficientFunds) {
+      const nativeLabel = state.strategy?.native_display || state.strategy?.native_symbol || 'ETH';
+      const faucets = state.strategy?.faucets || [];
+      errDiv.innerHTML = `❌ Your wallet doesn't have enough ${esc(nativeLabel)} to cover gas ` +
+        `(note: contract calls need gas even when the tx "value" is 0).` +
+        (faucets.length
+          ? `<br>Get free testnet funds: ${faucets.map(f => `<a href="${f}" target="_blank" style="color:var(--blue)">${esc(new URL(f).hostname)}</a>`).join(' · ')}`
+          : '');
+    } else {
+      errDiv.textContent = '❌ ' + (e.message || 'Unknown error');
+    }
+
     btn.closest('.tx-card').appendChild(errDiv);
     fetch(API + '/log-tx-result', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1424,6 +1479,9 @@ function buildTxCardHtml(tx, strategy) {
   const valueEth = tx.value ? (parseInt(tx.value,16)/1e18).toFixed(8) : '0';
   const gasLimit  = tx.gas  ? parseInt(tx.gas,16).toLocaleString() : '—';
   const net = state.parsedIntent?.network || strategy?.network || '—';
+  const nativeLabel = strategy?.native_display || strategy?.native_symbol || 'ETH';
+  const testnetBadge = strategy?.is_testnet
+    ? ` <span style="color:var(--dim);font-size:9px;">(testnet — not real funds)</span>` : '';
   const tiers = strategy?.gas_tiers || {};
   const selected = strategy?.selected_tier || 'standard';
   const tierRow = (name) => {
@@ -1440,12 +1498,13 @@ function buildTxCardHtml(tx, strategy) {
       <div class="tx-card-hdr">TRANSACTION PREVIEW${tx.data ? ' · CONTRACT CALL' : ''}</div>
       <div class="tx-row"><span class="k">from</span><span class="v amber">${esc(tx.from?.slice(0,10))}…</span></div>
       <div class="tx-row"><span class="k">to</span><span class="v amber">${esc(tx.to?.slice(0,10))}…${esc(tx.to?.slice(-6))}</span></div>
-      <div class="tx-row"><span class="k">value</span><span class="v teal">${valueEth} ${strategy?.native_symbol || 'ETH'}</span></div>
+      <div class="tx-row"><span class="k">value</span><span class="v teal">${valueEth} ${esc(nativeLabel)}${testnetBadge}</span></div>
       <div class="tx-row"><span class="k">network</span><span class="v">${esc(net)}</span></div>
       <div class="tx-row"><span class="k">gas limit</span><span class="v">${gasLimit}</span></div>
       <div class="tx-row"><span class="k">base fee</span><span class="v">${strategy?.base_fee_gwei ?? '—'} gwei</span></div>
       <div class="tx-row"><span class="k">est. cost</span><span class="v">${strategy?.estimated_cost_usd != null ? '$'+strategy.estimated_cost_usd : '—'}</span></div>
       <div class="tx-row"><span class="k">node</span><span class="v">${strategy?.node_connected ? '✓ live RPC' : '⚠ fallback'}</span></div>
+      ${tx.data ? `<div class="tx-row"><span class="k" style="color:var(--dim)">note</span><span class="v" style="color:var(--dim);font-size:10px;">contract calls need ${esc(nativeLabel)} for gas even though value is 0</span></div>` : ''}
       <div style="padding:10px 16px;border-bottom:1px solid var(--border);">
         <div style="font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:.4px;margin-bottom:6px;">GAS STRATEGY — click to switch</div>
         <div class="gas-ticker">${tierRow('cheapest')}${tierRow('standard')}${tierRow('fastest')}</div>
@@ -1510,6 +1569,7 @@ function onNetworkChange() {
   fetchGasTicker();
   if (document.getElementById('insightsPanel').classList.contains('open')) {
     fetchBalances(); fetchHistory();
+    if (state.insightsTab === 'supplychain') fetchMyContracts();
   }
 }
 
@@ -1560,6 +1620,7 @@ function toggleInsights() {
   if (opening) {
     fetchBalances();
     if (state.insightsTab === 'history') fetchHistory();
+    if (state.insightsTab === 'supplychain') fetchMyContracts();
   }
 }
 
@@ -1569,6 +1630,7 @@ function switchInsightsTab(tab) {
   document.querySelectorAll('.insights-pane').forEach(el => el.classList.toggle('active', el.id === `pane-${tab}`));
   if (tab === 'history') fetchHistory();
   if (tab === 'balances') fetchBalances();
+  if (tab === 'supplychain') fetchMyContracts();
 }
 
 /* ── BALANCES ── */
@@ -1634,6 +1696,101 @@ async function fetchHistory() {
   }
 }
 
+/* ── PRIVATE CONTRACT REGISTRY ── */
+let _scSourceCache = null;
+
+async function fetchMyContracts() {
+  const activeEl = document.getElementById('scActiveContract');
+  const listEl = document.getElementById('scMyContracts');
+  if (!state.walletAddress) {
+    activeEl.innerHTML = 'Connect your wallet to manage your private contract.';
+    listEl.innerHTML = '';
+    return;
+  }
+  try {
+    const res = await fetch(API + `/contracts/supply-chain/registry?wallet_address=${state.walletAddress}&network=${state.network}`);
+    const data = await res.json();
+    const contracts = data.contracts || [];
+    if (!contracts.length) {
+      activeEl.innerHTML = `No contract registered for <strong>${esc(state.network)}</strong> yet — register one below, or deploy your own first.`;
+      listEl.innerHTML = '';
+      return;
+    }
+    const active = contracts.find(c => c.active) || contracts[0];
+    activeEl.innerHTML = `Active on <strong>${esc(state.network)}</strong>: <span style="color:var(--teal)">${esc(active.address.slice(0,10))}…${esc(active.address.slice(-6))}</span> ${active.label ? '— '+esc(active.label) : ''}`;
+    listEl.innerHTML = contracts.map(c => `
+      <div class="sc-contract-row ${c.active?'active':''}">
+        <div>
+          <div class="scc-addr">${esc(c.address.slice(0,10))}…${esc(c.address.slice(-6))}</div>
+          <div class="scc-label">${esc(c.label || '')}${c.active ? ' · active' : ''}</div>
+        </div>
+        <div class="scc-actions">
+          ${!c.active ? `<button class="scc-btn" onclick="scActivateContract('${c.address}')">Use</button>` : ''}
+          <button class="scc-btn" onclick="scRemoveContract('${c.address}')">Remove</button>
+        </div>
+      </div>`).join('');
+  } catch(e) {
+    activeEl.innerHTML = `Couldn't load your contracts: ${esc(e.message)}`;
+  }
+}
+
+async function scRegisterContract() {
+  if (!state.walletAddress) { alert('Connect your wallet first.'); return; }
+  const address = document.getElementById('scRegistryAddr').value.trim();
+  const label = document.getElementById('scRegistryLabel').value.trim();
+  if (!address) { alert('Paste your contract address first.'); return; }
+  const activeEl = document.getElementById('scActiveContract');
+  activeEl.innerHTML = 'Verifying contract on-chain…';
+  try {
+    const res = await fetch(API + '/contracts/supply-chain/registry', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ wallet_address: state.walletAddress, network: state.network, contract_address: address, label })
+    });
+    const data = await res.json();
+    if (!res.ok) { activeEl.innerHTML = `<span style="color:var(--red)">❌ ${esc(data.detail || 'Failed to register')}</span>`; return; }
+    document.getElementById('scRegistryAddr').value = '';
+    document.getElementById('scRegistryLabel').value = '';
+    fetchMyContracts();
+  } catch(e) { activeEl.innerHTML = `<span style="color:var(--red)">❌ ${esc(e.message)}</span>`; }
+}
+
+async function scActivateContract(address) {
+  try {
+    await fetch(API + '/contracts/supply-chain/registry/activate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ wallet_address: state.walletAddress, network: state.network, contract_address: address })
+    });
+    fetchMyContracts();
+  } catch(e) { alert('Failed to switch active contract: ' + e.message); }
+}
+
+async function scRemoveContract(address) {
+  try {
+    await fetch(API + '/contracts/supply-chain/registry', {
+      method:'DELETE', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ wallet_address: state.walletAddress, network: state.network, contract_address: address })
+    });
+    fetchMyContracts();
+  } catch(e) { alert('Failed to remove contract: ' + e.message); }
+}
+
+function toggleDeployHelp() {
+  const el = document.getElementById('scDeployHelp');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+async function copyContractSource() {
+  try {
+    if (!_scSourceCache) {
+      const res = await fetch(API + '/contracts/supply-chain/source');
+      const data = await res.json();
+      _scSourceCache = data.source;
+    }
+    await navigator.clipboard.writeText(_scSourceCache);
+    alert('Contract source copied — paste it into Remix (remix.ethereum.org), compile, and deploy with your wallet.');
+  } catch(e) { alert("Couldn't copy automatically — fetch it directly: " + API + '/contracts/supply-chain/source'); }
+}
+
 /* ── SUPPLY CHAIN ── */
 async function signAndBroadcastGeneric(txParams, successLabel) {
   if (!window.ethereum) { alert('MetaMask not detected.'); return null; }
@@ -1694,11 +1851,15 @@ async function scCheckpoint() {
 
 async function scLookup() {
   const productId = document.getElementById('scLookupId').value.trim();
+  const contractOverride = document.getElementById('scLookupContract').value.trim();
   const resultEl = document.getElementById('scResult');
   if (!productId) return;
   resultEl.innerHTML = '<div class="ins-empty">Looking up…</div>';
   try {
-    const res = await fetch(API + `/contracts/supply-chain/product?product_id=${encodeURIComponent(productId)}&network=${state.network}`);
+    const params = new URLSearchParams({ product_id: productId, network: state.network });
+    if (contractOverride) params.set('contract_address', contractOverride);
+    else if (state.walletAddress) params.set('wallet_address', state.walletAddress);
+    const res = await fetch(API + `/contracts/supply-chain/product?${params.toString()}`);
     const data = await res.json();
     if (!data.deployed) { resultEl.innerHTML = `<div class="i-alert warn">⚠ ${esc(data.message)}</div>`; return; }
     if (!data.found) { resultEl.innerHTML = '<div class="i-alert warn">⚠ No product found with that batch ID on this network.</div>'; return; }
@@ -1709,7 +1870,7 @@ async function scLookup() {
       </div>`).join('') || '<div class="ins-empty">No checkpoints logged yet.</div>';
     resultEl.innerHTML = `
       <div class="i-alert ok" style="margin-bottom:10px;">✓ <strong>${esc(data.name)}</strong> — ${esc(data.origin)}<br>
-      Manufacturer: ${esc(data.manufacturer.slice(0,10))}…</div>
+      Manufacturer: ${esc(data.manufacturer.slice(0,10))}… · Contract: ${esc(data.contract.slice(0,10))}…</div>
       <div class="sc-section-title">Custody Trail</div>
       ${checkpoints}`;
   } catch(e) { resultEl.innerHTML = `<div class="i-alert err">❌ ${esc(e.message)}</div>`; }
