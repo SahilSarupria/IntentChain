@@ -16,6 +16,7 @@ from functools import lru_cache
 
 from web3 import Web3
 
+from app.blockchain.web3_compat import encode_fn
 from app.config.networks import normalize_network
 
 _TOKENS_PATH = os.path.join(os.path.dirname(__file__), "..", "config", "tokens.json")
@@ -129,8 +130,7 @@ def build_erc20_transfer_tx(w3: Web3, token_address: str, from_address: str, to_
             decimals = 18
 
     raw_amount = int(Decimal(str(amount_human)) * (Decimal(10) ** decimals))
-    data = contract.encodeABI(fn_name="transfer",
-                               args=[Web3.to_checksum_address(to_address), raw_amount])
+    data = encode_fn(contract, "transfer", [Web3.to_checksum_address(to_address), raw_amount])
 
     return {
         "from":  Web3.to_checksum_address(from_address),
@@ -150,8 +150,7 @@ def build_erc20_approve_tx(w3: Web3, token_address: str, from_address: str, spen
             decimals = 18
 
     raw_amount = int(Decimal(str(amount_human)) * (Decimal(10) ** decimals))
-    data = contract.encodeABI(fn_name="approve",
-                               args=[Web3.to_checksum_address(spender_address), raw_amount])
+    data = encode_fn(contract, "approve", [Web3.to_checksum_address(spender_address), raw_amount])
 
     return {
         "from":  Web3.to_checksum_address(from_address),
