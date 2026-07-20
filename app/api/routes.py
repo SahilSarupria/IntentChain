@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import Optional
 import logging
 import time
+import os
+
 from app.llm.intent_parser import parse_intent
 from app.services.intent_engine import build_tx_for_wallet
 from app.core.logger import get_logs, clear_logs, log_event, get_stats
@@ -10,6 +12,7 @@ from app.blockchain.rpc import get_w3, is_connected
 from app.blockchain import erc20, etherscan_client
 from app.blockchain.gas_oracle import compute_gas_strategies
 from app.services import supply_chain_service
+from app.services import contract_registry
 from app.config.networks import list_networks, normalize_network, get_network_config
 
 router = APIRouter()
@@ -59,6 +62,22 @@ class SupplyChainCheckpointRequest(BaseModel):
     location: str
     status: str
     temperature_c: int = 0
+
+class RegisterContractRequest(BaseModel):
+    wallet_address: str
+    network: str = "sepolia"
+    contract_address: str
+    label: str = ""
+
+class ActivateContractRequest(BaseModel):
+    wallet_address: str
+    network: str = "sepolia"
+    contract_address: str
+
+class RemoveContractRequest(BaseModel):
+    wallet_address: str
+    network: str = "sepolia"
+    contract_address: str
 
 
 def _is_missing(val) -> bool:
@@ -249,12 +268,75 @@ async def supply_chain_checkpoint(req: SupplyChainCheckpointRequest):
 
 
 @router.get("/contracts/supply-chain/product")
-async def supply_chain_product(product_id: str, network: str = Query("sepolia")):
+async def supply_chain_product(product_id: str, network: str = Query("sepolia"),
+                                 wallet_address: str = Query(None), contract_address: str = Query(None)):
     w3 = get_w3(network)
-    return supply_chain_service.read_product(w3, network, product_id)
+    return supply_chain_service.read_product(w3, network, product_id,
+                                              wallet_address=wallet_address, contract_address=contract_address)
 
 
 @router.get("/contracts/supply-chain/verify")
-async def supply_chain_verify(product_id: str, network: str = Query("sepolia")):
+async def supply_chain_verify(product_id: str, network: str = Query("sepolia"),
+                                wallet_address: str = Query(None), contract_address: str = Query(None)):
     w3 = get_w3(network)
-    return supply_chain_service.verify_authenticity(w3, network, product_id)
+    return supply_chain_service.verify_authenticity(w3, network, product_id,
+                                                      wallet_address=wallet_address, contract_address=contract_address)
+
+
+@router.get("/contracts/supply-chain/source")
+async def supply_chain_source():
+    """Serves the raw .sol source so the UI can offer a one-click copy for
+    customers who want to deploy their own private contract (e.g. via Remix)
+    before registering its address through /contracts/supply-chain/registry."""
+    path = os.path.join(os.path.dirname(__file__), "..", "blockchain", "contracts", "SupplyChainTraceability.sol")
+    try:
+        with open(path, "r") as fh:
+            source = fh.read()
+        return {"filename": "SupplyChainTraceability.sol", "source": source}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# CONTRACT REGISTRY — customers register their own private contract from
+# the UI, no .env access required. Each wallet's registered contract is
+# used automatically for that wallet's register/checkpoint/lookup calls.
+# ─────────────────────────────────────────────────────────────────────────
+@router.post("/contracts/supply-chain/registry")
+async def registry_register(req: RegisterContractRequest):
+    w3 = get_w3(req.network)
+    if not supply_chain_service.verify_contract_deployed(w3, req.contract_address):
+        raise HTTPException(
+            status_code=400,
+            detail=f"No contract code found at {req.contract_address} on '{req.network}'. "
+                   f"Double-check the address and network before registering.",
+        )
+    try:
+        result = contract_registry.register_contract(
+            req.wallet_address, req.network, req.contract_address, req.label
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    log_event("contract_registered", {"status": "success", "network": req.network,
+                                       "wallet": req.wallet_address[:10] + "…"})
+    return result
+
+
+@router.get("/contracts/supply-chain/registry")
+async def registry_list(wallet_address: str, network: str = Query(None)):
+    return {"contracts": contract_registry.list_contracts(wallet_address, network)}
+
+
+@router.post("/contracts/supply-chain/registry/activate")
+async def registry_activate(req: ActivateContractRequest):
+    try:
+        return contract_registry.set_active(req.wallet_address, req.network, req.contract_address)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/contracts/supply-chain/registry")
+async def registry_remove(req: RemoveContractRequest):
+    contract_registry.remove_contract(req.wallet_address, req.network, req.contract_address)
+    return {"status": "removed"}
