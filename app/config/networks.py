@@ -145,6 +145,10 @@ def list_networks() -> list[dict]:
             "is_testnet": cfg.get("is_testnet", False),
             "faucets": cfg.get("faucets", []),
             "explorer": cfg["explorer"],
+            # Deliberately the public fallback, never the (possibly key-bearing)
+            # env-configured RPC — this gets handed to MetaMask client-side via
+            # wallet_addEthereumChain, so it must never leak a private endpoint.
+            "rpc_url": cfg["default_rpc"],
         }
         for key, cfg in NETWORKS.items()
     ]

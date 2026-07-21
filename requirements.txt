@@ -7,3 +7,4 @@ streamlit
 requests
 spacy
 google-generativeai
+py-solc-x
