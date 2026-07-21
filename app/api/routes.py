@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException, Request, Query
 from pydantic import BaseModel
-from typing import Optional
-import logging
 import time
 import os
+from web3 import Web3
 
 from app.llm.intent_parser import parse_intent
 from app.services.intent_engine import build_tx_for_wallet
@@ -13,10 +12,11 @@ from app.blockchain import erc20, etherscan_client
 from app.blockchain.gas_oracle import compute_gas_strategies
 from app.services import supply_chain_service
 from app.services import contract_registry
+from app.services.strategy_engine import evaluate_strategy
+from app.blockchain import contract_compiler
 from app.config.networks import list_networks, normalize_network, get_network_config
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 MISSING_SENTINEL = {"none", "", "null", "unknown", "n/a", "0"}
 
@@ -37,12 +37,41 @@ REQUIRED_FIELDS_BY_ACTION = {
     "log_checkpoint":   ["action", "product_id", "location", "status", "network"],
     "verify_product":   ["action", "product_id", "network"],
     "swap":             ["action", "token", "amount", "network"],
+    "general_question": ["action"],
+    "deploy_contract":  ["action", "network"],
 }
 DEFAULT_REQUIRED = ["action", "amount", "recipient", "network", "priority"]
+
+# Every action funnels into one of four UX paths:
+#  - "transaction": needs an unsigned tx + MetaMask signature (existing flow)
+#  - "read":        answers directly from chain/API data, no signature needed
+#  - "knowledge":   the LLM already answered it in the parse step, nothing else to do
+#  - "deploy":      compiles + deploys the customer's own private supply-chain
+#                    contract, then auto-registers it (persisted, not session-only)
+TRANSACTION_ACTIONS = {"transfer", "send", "bridge", "transfer_token", "send_token",
+                        "approve_token", "register_product", "log_checkpoint", "swap"}
+READ_ACTIONS = {"check_balance", "get_history", "verify_product"}
+KNOWLEDGE_ACTIONS = {"general_question"}
+DEPLOY_ACTIONS = {"deploy_contract"}
+
+
+def _mode_for_action(action: str) -> str:
+    action = (action or "").lower()
+    if action in READ_ACTIONS:
+        return "read"
+    if action in KNOWLEDGE_ACTIONS:
+        return "knowledge"
+    if action in DEPLOY_ACTIONS:
+        return "deploy"
+    return "transaction"
 
 
 class PromptRequest(BaseModel):
     prompt: str
+
+class ExecuteReadRequest(BaseModel):
+    intent: dict
+    wallet_address: str | None = None
 
 class BuildTxRequest(BaseModel):
     intent:       dict
@@ -79,6 +108,10 @@ class RemoveContractRequest(BaseModel):
     network: str = "sepolia"
     contract_address: str
 
+class DeployContractRequest(BaseModel):
+    network: str = "sepolia"
+    from_address: str
+
 
 def _is_missing(val) -> bool:
     return val is None or str(val).strip().lower() in MISSING_SENTINEL
@@ -107,18 +140,106 @@ async def parse_intent_only(request: PromptRequest, raw: Request):
     log_event("parse_intent", {"status": "started", "prompt_length": len(request.prompt), "client_ip": client_ip})
     try:
         parsed  = parse_intent(request.prompt)
-        missing = _detect_missing(parsed)
+        mode    = _mode_for_action(parsed.get("action"))
+        missing = [] if mode == "knowledge" else _detect_missing(parsed)
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         log_event("parse_intent", {
             "status": "success", "latency_ms": latency_ms,
             "parsed_action": parsed.get("action"), "parsed_network": parsed.get("network"),
-            "missing_fields": missing, "prompt_preview": request.prompt[:80],
+            "mode": mode, "missing_fields": missing, "prompt_preview": request.prompt[:80],
         })
-        return {"parsed": parsed, "missing_fields": missing, "latency_ms": latency_ms}
+        return {"parsed": parsed, "missing_fields": missing, "mode": mode, "latency_ms": latency_ms}
     except Exception as exc:
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         log_event("parse_intent", {"status": "error", "error": str(exc), "latency_ms": latency_ms})
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# READ-ONLY EXECUTION — for actions that just answer a question about chain
+# state (balance/history/product lookup) instead of building a signable tx.
+# No MetaMask involved at all; this is a plain GET-style answer.
+# ─────────────────────────────────────────────────────────────────────────
+@router.post("/execute-read")
+async def execute_read(request: ExecuteReadRequest):
+    t0 = time.perf_counter()
+    intent = request.intent
+    action = str(intent.get("action") or "").lower()
+    network = normalize_network(intent.get("network"))
+    wallet = request.wallet_address
+
+    try:
+        if action == "check_balance":
+            if not wallet:
+                return {"answer": "Connect your wallet first so I know which address to check.", "data": None}
+            w3 = get_w3(network)
+            result = erc20.list_wallet_balances(w3, network, wallet)
+            answer = _format_balances_answer(result, network)
+            data, render_as = result, "balances"
+
+        elif action == "get_history":
+            if not wallet:
+                return {"answer": "Connect your wallet first so I know which address to look up.", "data": None}
+            native = etherscan_client.get_native_tx_history(wallet, network, 10)
+            tokens = etherscan_client.get_token_tx_history(wallet, network, 10)
+            answer = _format_history_answer(native, network)
+            data, render_as = {"native": native, "tokens": tokens}, "history"
+
+        elif action == "verify_product":
+            product_id = intent.get("product_id")
+            if not product_id or str(product_id).lower() in MISSING_SENTINEL:
+                return {"answer": "Which batch/SKU ID should I look up?", "data": None}
+            w3 = get_w3(network)
+            result = supply_chain_service.read_product(w3, network, product_id, wallet_address=wallet)
+            answer = _format_verify_answer(result, product_id)
+            data, render_as = result, "provenance"
+
+        else:
+            return {"answer": f"'{action}' isn't a read action I know how to answer directly.", "data": None}
+
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+        log_event("execute_read", {"status": "success", "action": action, "network": network, "latency_ms": latency_ms})
+        return {"answer": answer, "data": data, "render_as": render_as, "latency_ms": latency_ms}
+
+    except Exception as exc:
+        log_event("execute_read", {"status": "error", "action": action, "network": network, "error": str(exc)})
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _format_balances_answer(result: dict, network: str) -> str:
+    balances = result.get("balances", [])
+    lines = []
+    for b in balances:
+        if b.get("error") or b.get("balance") is None or b["balance"] == 0:
+            continue
+        lines.append(f"{b['balance']:.6f} {b['symbol']}")
+    if not lines:
+        return f"Your wallet doesn't hold any tracked balances on {network} right now (or they're all zero)."
+    return f"On {network}, you have: " + ", ".join(lines) + "."
+
+
+def _format_history_answer(native: dict, network: str) -> str:
+    if "error" in native:
+        return f"Couldn't pull transaction history: {native['error']}"
+    txs = native.get("transactions", [])
+    if not txs:
+        return f"No transactions found for your wallet on {network}."
+    latest = txs[0]
+    return (f"You have {len(txs)} recent transaction(s) on {network}. "
+            f"Most recent: {latest['value']:.6f} to {latest['to'][:10]}… "
+            f"({'failed' if latest['is_error'] else 'success'}).")
+
+
+def _format_verify_answer(result: dict, product_id: str) -> str:
+    if not result.get("deployed"):
+        return result.get("message", "No supply-chain contract configured to check against.")
+    if "error" in result:
+        return f"Couldn't verify '{product_id}': {result['error']}"
+    if not result.get("found"):
+        return f"No record of '{product_id}' was found on this contract — it may not be genuine, or hasn't been registered yet."
+    count = len(result.get("checkpoints", []))
+    return (f"✓ '{product_id}' ({result.get('name')}) is authentic — registered by "
+            f"{result['manufacturer'][:10]}… with {count} checkpoint(s) on record.")
 
 
 @router.post("/build-tx")
@@ -138,6 +259,7 @@ async def build_tx(request: BuildTxRequest):
             "gas_estimate": strategy.get("gas_estimate"),
             "gas_price_strategy": strategy.get("gas_price_strategy"),
             "selected_tier": strategy.get("selected_tier"),
+            "simulation_warning": bool(result.get("simulation_warning")),
         })
         result["latency_ms"] = latency_ms
         return result
@@ -251,7 +373,6 @@ async def supply_chain_register(req: SupplyChainRegisterRequest):
         log_event("supply_chain_register", {"status": "success", "network": req.network, "product_id": req.product_id})
         return result
     except ValueError as exc:
-        logger.warning("/build-tx validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -340,3 +461,41 @@ async def registry_activate(req: ActivateContractRequest):
 async def registry_remove(req: RemoveContractRequest):
     contract_registry.remove_contract(req.wallet_address, req.network, req.contract_address)
     return {"status": "removed"}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# ONE-CLICK DEPLOY — compiles SupplyChainTraceability.sol server-side and
+# hands back an unsigned contract-creation tx. No Remix, no copy-paste.
+# Registration into the (persistent, file-backed, not session-scoped)
+# contract registry happens as a separate step once the frontend has the
+# deployed address from the mined receipt — see /contracts/supply-chain/registry.
+# ─────────────────────────────────────────────────────────────────────────
+@router.post("/contracts/supply-chain/deploy")
+async def supply_chain_deploy(req: DeployContractRequest):
+    network = normalize_network(req.network)
+    try:
+        compiled = contract_compiler.compile_supply_chain_contract()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    w3 = get_w3(network)
+    from_address = Web3.to_checksum_address(req.from_address)
+
+    intent = {"network": network}  # only used for gas-tier selection defaults
+    strategy = evaluate_strategy(intent, from_address, network=network)
+
+    tx = {
+        "from": from_address,
+        "data": compiled["bytecode"],
+        "value": hex(0),
+    }
+    try:
+        gas_estimate = w3.eth.estimate_gas(tx)
+    except Exception:
+        gas_estimate = 1_500_000  # contract creation is gas-heavy; safe fallback if estimation fails
+    tx["gas"] = hex(gas_estimate)
+    tx = {**tx, **strategy["fee_fields"]}
+    tx["chainId"] = hex(get_network_config(network)["chain_id"])
+
+    log_event("contract_deploy_built", {"status": "success", "network": network, "gas_estimate": gas_estimate})
+    return {"tx_params": tx, "strategy": strategy, "abi": compiled["abi"]}

@@ -693,6 +693,45 @@ body::before {
 }
 .scc-btn:hover { color: var(--amber2); border-color: var(--amber-glow); }
 .sc-deploy-help:hover { color: var(--amber2) !important; }
+
+/* ════════ IN-CHAT READ-RESULT CARDS (balances / history / provenance) ════════ */
+.read-card-wrap { margin-top: 10px; }
+.provenance-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px;
+  background: var(--surface); margin-top: 10px;
+}
+.provenance-header { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.provenance-header .p-name { font-family: var(--mono); font-size: 13px; color: var(--amber2); font-weight: 700; }
+.provenance-badge {
+  display: inline-block; padding: 2px 9px; border-radius: 20px;
+  font-family: var(--mono); font-size: 9px; margin-left: 8px; vertical-align: middle;
+}
+.provenance-badge.authentic { background: var(--teal-dim); color: var(--teal); border: 1px solid rgba(45,212,191,.3); }
+.provenance-header .p-meta { font-family: var(--mono); font-size: 10px; color: var(--dim); margin-top: 5px; }
+.timeline-track { position: relative; padding-left: 22px; }
+.timeline-track::before { content: ''; position: absolute; left: 5px; top: 4px; bottom: 4px; width: 2px; background: var(--border2); }
+.timeline-node { position: relative; padding-bottom: 16px; }
+.timeline-node:last-child { padding-bottom: 0; }
+.timeline-dot {
+  position: absolute; left: -22px; top: 2px; width: 12px; height: 12px; border-radius: 50%;
+  background: var(--amber); box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px var(--amber-glow);
+}
+.timeline-dot.cold { background: #3b82f6; box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px rgba(59,130,246,.35); }
+.timeline-dot.hot  { background: var(--red); box-shadow: 0 0 0 3px var(--surface), 0 0 0 4px rgba(245,101,101,.35); }
+.timeline-content { font-family: var(--mono); }
+.timeline-status { font-size: 11.5px; color: var(--text); font-weight: 700; }
+.timeline-loc { font-size: 10.5px; color: var(--muted); margin-top: 3px; }
+.timeline-temp { display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 10px; font-size: 9px; font-weight: 700; }
+.timeline-temp.cold { background: rgba(59,130,246,.15); color: #60a5fa; }
+.timeline-temp.warm { background: rgba(245,166,35,.15); color: var(--amber2); }
+.timeline-temp.hot  { background: var(--red-dim); color: var(--red); }
+.timeline-meta { font-size: 9px; color: var(--dim); margin-top: 4px; }
+.copy-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 5px; cursor: pointer;
+  color: var(--dim); font-size: 12px; flex-shrink: 0; transition: color .15s, background .15s;
+}
+.copy-icon-btn:hover { color: var(--amber2); background: var(--surface2); }
 </style>
 </head>
 <body>
@@ -721,7 +760,11 @@ body::before {
     <div class="ex-item" onclick="fillFromSidebar(this)">Bridge 0.002 ETH to Arbitrum low priority</div>
     <div class="ex-item" onclick="fillFromSidebar(this)">Send 0.01 ETH to vitalik.eth on mainnet</div>
     <div class="ex-item" onclick="fillFromSidebar(this)">Send 25 USDC to 0xAbCd1234ef fastest</div>
+    <div class="ex-item" onclick="fillFromSidebar(this)">How much ETH do I have?</div>
     <div class="ex-item" onclick="fillFromSidebar(this)">Check my balances on Sepolia</div>
+    <div class="ex-item" onclick="fillFromSidebar(this)">What is a blockchain supply network?</div>
+    <div class="ex-item" onclick="fillFromSidebar(this)">How does gas work on Ethereum?</div>
+    <div class="ex-item" onclick="fillFromSidebar(this)">Deploy my own supply chain contract</div>
     <div class="ex-item" onclick="fillFromSidebar(this)">Register batch COFFEE-A123 from Huila, Colombia</div>
     <div class="ex-item" onclick="fillFromSidebar(this)">Log checkpoint for COFFEE-A123: arrived Rotterdam, 4°C</div>
   </div>
@@ -741,10 +784,11 @@ body::before {
   <div class="sidebar-bottom">
     <div class="wallet-card" onclick="connectWallet()">
       <div class="wallet-emoji">🦊</div>
-      <div>
+      <div style="flex:1;min-width:0;">
         <div class="wallet-lbl">METAMASK WALLET</div>
         <div class="wallet-addr" id="walletAddr">Not connected</div>
       </div>
+      <span id="walletCopyBtn" class="copy-icon-btn" style="display:none;" onclick="event.stopPropagation(); copyToClipboard(state.walletAddress, this);" title="Copy address">⧉</span>
     </div>
     <div class="status-row">
       <div class="dot" id="backendDot"></div>
@@ -866,8 +910,15 @@ body::before {
 
         <div class="sc-section-title">🔐 My Private Contract</div>
         <div id="scActiveContract" class="ins-empty" style="padding:14px 8px;">Connect your wallet to manage your private contract.</div>
+
+        <button class="ins-btn" style="width:100%;margin-bottom:6px;" onclick="deployMyContract()">🚀 Deploy My Own Contract (1-click)</button>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--dim);margin-bottom:10px;">
+          Compiles &amp; deploys a fresh, private SupplyChainTraceability instance under your wallet — no Remix, no copy-paste. Registration is permanent (saved server-side), not tied to this browser session.
+        </div>
+        <div id="scDeployStatus" style="display:none;margin-bottom:10px;"></div>
+
         <div class="sc-form">
-          <label>CONTRACT ADDRESS</label>
+          <label>OR REGISTER AN EXISTING CONTRACT ADDRESS</label>
           <input id="scRegistryAddr" placeholder="0x… (your deployed SupplyChainTraceability contract)">
           <label>LABEL (optional)</label>
           <input id="scRegistryLabel" placeholder="Acme Coffee Co. — Sepolia">
@@ -875,13 +926,13 @@ body::before {
         </div>
         <div id="scMyContracts"></div>
         <div class="sc-deploy-help" onclick="toggleDeployHelp()" style="cursor:pointer;font-family:var(--mono);font-size:9.5px;color:var(--dim);margin:8px 0;">
-          ▸ Don't have a contract yet? Deploy your own (click to expand)
+          ▸ Prefer deploying manually? (click to expand)
         </div>
         <div id="scDeployHelp" style="display:none;font-family:var(--mono);font-size:10px;color:var(--muted);line-height:1.6;margin-bottom:6px;">
-          This app never deploys contracts on your behalf — you stay in control of your own private
-          instance. Deploy <code>SupplyChainTraceability.sol</code> yourself (e.g. paste it into
+          You can still deploy <code>SupplyChainTraceability.sol</code> yourself (e.g. paste it into
           <a href="https://remix.ethereum.org" target="_blank" style="color:var(--blue);">Remix</a>,
-          compile, and deploy with your wallet), then paste the resulting address above.
+          compile, and deploy with your wallet) if you'd rather not use the 1-click compiler above —
+          this app never deploys on your behalf without your signature either way.
           <button class="ins-refresh" style="margin-top:6px;" onclick="copyContractSource()">📋 Copy contract source (.sol)</button>
         </div>
 
@@ -938,6 +989,7 @@ const state = {
   network:       localStorage.getItem('ic_network') || 'sepolia',
   parsedIntent:  null,
   missingFields: [],
+  intentMode:    'transaction', // 'transaction' | 'read' | 'knowledge'
   txParams:      null,
   strategy:      null,
   stage:         -1,
@@ -955,12 +1007,12 @@ const STEPS = [
 ];
 
 const FIELD_META = {
-  action:        { label:'Action',            type:'select', options:['transfer','send','transfer_token','approve_token','bridge','check_balance','get_history','register_product','log_checkpoint','verify_product'] },
+  action:        { label:'Action',            type:'select', options:['transfer','send','transfer_token','approve_token','bridge','check_balance','get_history','register_product','log_checkpoint','verify_product','deploy_contract','general_question'] },
   amount:        { label:'Amount',            type:'number' },
   recipient:     { label:'Recipient Address', type:'text',   hint:'0x…' },
   spender:       { label:'Spender Address',   type:'text',   hint:'0x…' },
   token:         { label:'Token',             type:'text',   hint:'ETH / USDC / 0x…' },
-  network:       { label:'Network',           type:'select', options:['sepolia','ethereum','polygon','arbitrum','optimism','bsc'] },
+  network:       { label:'Network (also determines currency)', type:'select', options:['sepolia','ethereum','polygon','arbitrum','optimism','bsc'] },
   priority:      { label:'Priority',          type:'select', options:['low_cost','normal','fast'] },
   product_id:    { label:'Batch / SKU ID',    type:'text',   hint:'COFFEE-BATCH-A123' },
   name:          { label:'Product Name',      type:'text' },
@@ -1092,13 +1144,26 @@ function setStage(uid, n, meta = {}) {
 function updateWalletUI() {
   const addr = state.walletAddress;
   const el = document.getElementById('walletAddr');
+  const copyBtn = document.getElementById('walletCopyBtn');
   if (addr) {
     el.textContent = addr.slice(0,8) + '…' + addr.slice(-6);
     el.style.color = 'var(--teal)';
+    if (copyBtn) copyBtn.style.display = 'inline-block';
   } else {
     el.textContent = 'Not connected';
     el.style.color = '';
+    if (copyBtn) copyBtn.style.display = 'none';
   }
+}
+
+function copyToClipboard(text, btn) {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    if (!btn) return;
+    const orig = btn.textContent;
+    btn.textContent = '✓';
+    setTimeout(() => { btn.textContent = orig; }, 1200);
+  }).catch(() => {});
 }
 
 async function connectWallet() {
@@ -1168,22 +1233,13 @@ async function executeIntent() {
   const prompt = inp.value.trim();
   if (!prompt) return;
 
-  if (!state.walletAddress) {
-    if (!window.ethereum) {
-      createAiMsg('⚠ MetaMask not detected. Install MetaMask to use IntentChain.');
-    } else {
-      createAiMsg('Please connect your MetaMask wallet first — click the wallet card in the sidebar.');
-    }
-    return;
-  }
-
   // Echo user message
   addUserMsg(prompt);
   inp.value = ''; inp.style.height = 'auto';
   document.getElementById('sendBtn').disabled = true;
 
   // Reset flow state
-  state.parsedIntent = null; state.missingFields = [];
+  state.parsedIntent = null; state.missingFields = []; state.intentMode = 'transaction';
   state.txParams = null; state.strategy = null;
   closePopup();
 
@@ -1193,15 +1249,9 @@ async function executeIntent() {
   showTyping();
 
   try {
-    // Create the AI message with timeline
-    const bubble = createAiMsg(
-      `<p>Processing your intent…</p>${buildTlHtml(tlUid)}`,
-      'activeAiMsg'
-    );
-    state.activeMsgEl = bubble;
-    setStage(tlUid, 0, { 0: new Date().toLocaleTimeString() });
-
-    // ── STEP 1: Parse intent ──
+    // ── STEP 1: Parse intent (works with or without a wallet — knowledge
+    // questions and even balance/history lookups don't need one until the
+    // point where we'd actually need an address) ──
     const t0 = Date.now();
     const res = await fetch(API + '/parse-intent', {
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1211,14 +1261,50 @@ async function executeIntent() {
     const data = await res.json();
     const parseMs = data.latency_ms || (Date.now() - t0);
 
-    // Log metrics to console only
-    console.log('[metrics] parse_intent', { latency_ms: parseMs, parsed: data.parsed, missing: data.missing_fields });
+    console.log('[metrics] parse_intent', { latency_ms: parseMs, mode: data.mode, parsed: data.parsed, missing: data.missing_fields });
 
     state.parsedIntent  = data.parsed;
     state.missingFields = data.missing_fields;
+    state.intentMode     = data.mode || 'transaction';
 
-    // If the model didn't extract a network, default to whatever's selected
-    // in the sidebar instead of nagging the user for it.
+    // ── KNOWLEDGE: the LLM already answered it, just show the answer ──
+    if (state.intentMode === 'knowledge') {
+      hideTyping();
+      createAiMsg(esc(data.parsed.answer || "I'm not sure — could you rephrase that?").replace(/\n/g,'<br>'));
+      refreshLogs();
+      return;
+    }
+
+    // ── DEPLOY: one-click contract deploy, triggerable from chat too ──
+    if (state.intentMode === 'deploy') {
+      hideTyping();
+      if (!state.walletAddress) {
+        createAiMsg('Connect your MetaMask wallet first (sidebar), then ask me to deploy your contract again.');
+        return;
+      }
+      if (state.parsedIntent.network && state.parsedIntent.network !== 'none') {
+        state.network = state.parsedIntent.network;
+        const sel = document.getElementById('networkSelect');
+        if (sel && [...sel.options].some(o => o.value === state.network)) sel.value = state.network;
+      }
+      createAiMsg(`Deploying your own private supply-chain contract on ${esc(state.network)} — opening the Supply Chain panel, watch the status there.`);
+      document.getElementById('insightsPanel').classList.add('open');
+      switchInsightsTab('supplychain');
+      await deployMyContract();
+      return;
+    }
+
+    // ── READ / TRANSACTION: both need a connected wallet to go further ──
+    if (!state.walletAddress) {
+      hideTyping();
+      if (!window.ethereum) {
+        createAiMsg('⚠ MetaMask not detected. Install MetaMask to check balances or send transactions — but feel free to keep asking general questions.');
+      } else {
+        createAiMsg('Connect your MetaMask wallet first (sidebar) — I\'ve got the rest of your request ready to go once you do.');
+      }
+      return;
+    }
+
     if (!state.parsedIntent.network || state.parsedIntent.network === 'none') {
       state.parsedIntent.network = state.network;
       state.missingFields = state.missingFields.filter(f => f !== 'network');
@@ -1229,25 +1315,41 @@ async function executeIntent() {
       fetchGasTicker();
     }
 
-    setStage(tlUid, 1, { 1: parseMs + 'ms' });
+    // Create the AI message with timeline (transaction path) or a lighter
+    // header (read path — no gas/signature stages apply)
+    const bubble = createAiMsg(
+      state.intentMode === 'transaction'
+        ? `<p>Processing your intent…</p>${buildTlHtml(tlUid)}`
+        : `<p>Looking that up…</p>`,
+      'activeAiMsg'
+    );
+    state.activeMsgEl = bubble;
+    if (state.intentMode === 'transaction') setStage(tlUid, 0, { 0: new Date().toLocaleTimeString() });
 
-    // Update bubble content with parsed fields
-    bubble.innerHTML = `
-      <p>I've analysed your intent. Here's what I extracted:</p>
-      <div id="parsedFieldsSlot">${renderFieldsHtml(state.parsedIntent, state.missingFields)}</div>
-      ${buildTlHtml(tlUid)}`;
-    setStage(tlUid, 1, { 1: `${parseMs}ms · ${data.parsed.action || '?'}` });
+    if (state.intentMode === 'transaction') {
+      setStage(tlUid, 1, { 1: parseMs + 'ms' });
+      bubble.innerHTML = `
+        <p>I've analysed your intent. Here's what I extracted:</p>
+        <div id="parsedFieldsSlot">${renderFieldsHtml(state.parsedIntent, state.missingFields)}</div>
+        ${buildTlHtml(tlUid)}`;
+      setStage(tlUid, 1, { 1: `${parseMs}ms · ${data.parsed.action || '?'}` });
+    } else {
+      bubble.innerHTML = `
+        <p>Got it — ${esc(data.parsed.action)} on ${esc(state.parsedIntent.network)}.</p>
+        <div id="parsedFieldsSlot">${renderFieldsHtml(state.parsedIntent, state.missingFields)}</div>`;
+    }
 
     refreshLogs();
 
     if (state.missingFields.length > 0) {
-      // Show popup above input
       showMissingPopup(state.missingFields);
       bubble.insertAdjacentHTML('beforeend',
         `<div class="i-alert warn" id="missingWarn">⚠ ${state.missingFields.length} field(s) need your input — see the panel above the text box.</div>`);
-    } else {
+    } else if (state.intentMode === 'transaction') {
       setStage(tlUid, 2);
       await buildAndShowTx(bubble, tlUid);
+    } else {
+      await executeRead(bubble);
     }
 
     scrollBottom();
@@ -1258,6 +1360,86 @@ async function executeIntent() {
   } finally {
     document.getElementById('sendBtn').disabled = false;
   }
+}
+
+/* ── EXECUTE READ (balance/history/product lookup — no signature needed) ── */
+async function executeRead(bubble) {
+  if (!bubble) bubble = state.activeMsgEl;
+  try {
+    const res = await fetch(API + '/execute-read', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ intent: state.parsedIntent, wallet_address: state.walletAddress })
+    });
+    const data = await res.json();
+    hideTyping();
+    if (!res.ok) {
+      bubble.insertAdjacentHTML('beforeend', `<div class="i-alert err" style="margin-top:8px;">❌ ${esc(data.detail || 'Lookup failed')}</div>`);
+      return;
+    }
+    bubble.insertAdjacentHTML('beforeend', `<p style="margin-top:10px;">${esc(data.answer)}</p>`);
+    const cardHtml = renderReadCard(data.render_as, data.data, state.parsedIntent?.network || state.network);
+    if (cardHtml) bubble.insertAdjacentHTML('beforeend', cardHtml);
+    refreshLogs();
+    scrollBottom();
+  } catch(e) {
+    hideTyping();
+    bubble.insertAdjacentHTML('beforeend', `<div class="i-alert err" style="margin-top:8px;">❌ ${esc(e.message)}</div>`);
+  }
+}
+
+/* ── RICH READ-RESULT CARDS (balances / history / provenance timeline) ── */
+function tempClass(t) {
+  if (t == null) return '';
+  return t <= 8 ? 'cold' : t <= 25 ? 'warm' : 'hot';
+}
+
+function renderReadCard(renderAs, data, network) {
+  if (!data) return '';
+
+  if (renderAs === 'balances') {
+    const rows = (data.balances || []).filter(b => !b.error && b.balance != null && b.balance !== 0);
+    if (!rows.length) return '';
+    return `<div class="read-card-wrap">${rows.map(b => `
+      <div class="ins-row"><span class="sym">${esc(b.symbol)}${b.native?' (native)':''}</span><span class="bal">${b.balance.toFixed(6)}</span></div>
+    `).join('')}</div>`;
+  }
+
+  if (renderAs === 'history') {
+    const txs = (data.native?.transactions || []).slice(0, 5);
+    if (!txs.length) return '';
+    const nativeLabel = NETWORK_INFO[network]?.native || 'ETH';
+    return `<div class="read-card-wrap">${txs.map(tx => `
+      <div class="hist-item">
+        <div class="hist-row"><span>${tx.value.toFixed(6)} ${esc(nativeLabel)}</span><span style="color:${tx.is_error?'var(--red)':'var(--teal)'}">${tx.is_error?'failed':'success'}</span></div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--dim);margin-bottom:4px;">${esc(tx.hash.slice(0,14))}… · ${new Date(tx.timestamp*1000).toLocaleString()}</div>
+        <a href="${tx.explorer_url}" target="_blank">↗ View on explorer</a>
+      </div>`).join('')}</div>`;
+  }
+
+  if (renderAs === 'provenance') {
+    if (!data.deployed) return `<div class="i-alert warn" style="margin-top:8px;">⚠ ${esc(data.message)}</div>`;
+    if (!data.found) return '';
+    const checkpoints = data.checkpoints || [];
+    const nodes = checkpoints.map(c => `
+      <div class="timeline-node">
+        <div class="timeline-dot ${tempClass(c.temperature_c)}"></div>
+        <div class="timeline-content">
+          <div class="timeline-status">${esc(c.status)}${c.temperature_c!=null?`<span class="timeline-temp ${tempClass(c.temperature_c)}">${c.temperature_c}°C</span>`:''}</div>
+          <div class="timeline-loc">📍 ${esc(c.location)}</div>
+          <div class="timeline-meta">${esc(c.recorded_by.slice(0,10))}… · ${new Date(c.timestamp*1000).toLocaleString()}</div>
+        </div>
+      </div>`).join('') || '<div class="ins-empty" style="padding:6px 0;text-align:left;">No checkpoints logged yet.</div>';
+    return `
+      <div class="provenance-card">
+        <div class="provenance-header">
+          <span class="p-name">${esc(data.name)}</span><span class="provenance-badge authentic">✓ verified</span>
+          <div class="p-meta">${esc(data.origin)} · manufacturer ${esc(data.manufacturer.slice(0,10))}… · registered ${new Date(data.registered_at*1000).toLocaleDateString()}</div>
+        </div>
+        <div class="timeline-track">${nodes}</div>
+      </div>`;
+  }
+
+  return '';
 }
 
 /* ── BUILD TX ── */
@@ -1290,7 +1472,7 @@ async function buildAndShowTx(bubble, tlUid) {
     });
 
     if (bubble && !bubble.querySelector('.tx-card')) {
-      bubble.insertAdjacentHTML('beforeend', buildTxCardHtml(data.tx_params, data.strategy));
+      bubble.insertAdjacentHTML('beforeend', buildTxCardHtml(data.tx_params, data.strategy, data.simulation_warning));
     }
 
     refreshLogs();
@@ -1303,6 +1485,53 @@ async function buildAndShowTx(bubble, tlUid) {
   }
 }
 
+/* ── CHAIN SAFETY ──
+   MetaMask signs on whatever network the extension currently has active —
+   it does NOT automatically follow our app's network selector, and (in
+   many versions) doesn't strictly enforce the tx's `chainId` field either.
+   So before every signature request we explicitly ask the wallet to switch
+   (or, if it's never seen the chain before, add + switch) to the network
+   the tx was actually built for. This is what was silently missing before:
+   the app said "Sepolia" while MetaMask happily signed on whatever chain
+   it was last left on. */
+async function ensureCorrectChain(networkId) {
+  const info = NETWORK_INFO[networkId];
+  if (!info || !window.ethereum) return;
+  const targetHex = '0x' + info.chain_id.toString(16);
+
+  let current;
+  try { current = await window.ethereum.request({ method: 'eth_chainId' }); } catch(e) { return; }
+  if (current && current.toLowerCase() === targetHex.toLowerCase()) return;
+
+  try {
+    await window.ethereum.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: targetHex }],
+    });
+  } catch (switchError) {
+    if (switchError.code === 4902) {
+      try {
+        await window.ethereum.request({
+          method: 'wallet_addEthereumChain',
+          params: [{
+            chainId: targetHex,
+            chainName: info.label,
+            nativeCurrency: { name: info.display_native || info.native, symbol: info.native, decimals: 18 },
+            rpcUrls: [info.rpc_url],
+            blockExplorerUrls: [info.explorer],
+          }],
+        });
+      } catch (addError) {
+        throw new Error(`Couldn't switch MetaMask to ${info.label}: ${addError.message || addError}`);
+      }
+    } else if (switchError.code === 4001) {
+      throw new Error(`Switch to ${info.label} was rejected — can't sign on the wrong network.`);
+    } else {
+      throw new Error(`Please switch MetaMask to ${info.label} manually, then try again.`);
+    }
+  }
+}
+
 /* ── SIGN ── */
 async function signWithMetaMask(btn) {
   if (!window.ethereum) { alert('MetaMask not detected.'); return; }
@@ -1312,6 +1541,18 @@ async function signWithMetaMask(btn) {
   const tlUid = fill ? fill.id.replace('-fill','') : null;
 
   btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Checking network…';
+
+  try {
+    await ensureCorrectChain(state.parsedIntent?.network || state.network);
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '🦊 Sign &amp; Send with MetaMask';
+    btn.closest('.tx-card').insertAdjacentHTML('beforeend',
+      `<div class="i-alert err" style="margin-top:8px;">❌ ${esc(e.message)}</div>`);
+    return;
+  }
+
   btn.innerHTML = '<span class="spinner"></span>Waiting for MetaMask…';
 
   state.preTxBalances = await fetchBalances().catch(() => null);
@@ -1341,7 +1582,10 @@ async function signWithMetaMask(btn) {
           <div style="font-size:30px;margin-bottom:10px;">✅</div>
           <div style="font-family:var(--mono);font-size:13px;color:var(--teal);margin-bottom:4px;">Transaction Broadcast!</div>
           <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">Awaiting block confirmation.</div>
-          <div class="tx-hash-display">${esc(txHash)}</div>
+          <div class="tx-hash-display" style="display:flex;align-items:center;gap:8px;justify-content:center;">
+            <span>${esc(txHash)}</span>
+            <span class="copy-icon-btn" onclick="copyToClipboard('${esc(txHash)}', this)" title="Copy tx hash">⧉</span>
+          </div>
           <a class="etherscan-link" href="${base}/tx/${esc(txHash)}" target="_blank">↗ View on Etherscan</a>
         </div>`;
     }
@@ -1398,11 +1642,17 @@ function showMissingPopup(missing) {
   const grid = document.getElementById('mfGrid');
   grid.innerHTML = missing.map(f => {
     const m = FIELD_META[f] || { label:f, type:'text' };
-    if (m.type === 'select') return `<div class="form-group">
+    if (m.type === 'select') {
+      const defaultVal = f === 'network' ? state.network : m.options[0];
+      return `<div class="form-group">
       <label>${m.label.toUpperCase()}</label>
       <select class="form-select" id="mf-${f}">
-        ${m.options.map(o=>`<option value="${o}">${o}</option>`).join('')}
+        ${m.options.map(o=>{
+          const displayName = (f === 'network' && NETWORK_INFO[o]) ? `${NETWORK_INFO[o].label} (${NETWORK_INFO[o].display_native})` : o;
+          return `<option value="${o}" ${o===defaultVal?'selected':''}>${displayName}</option>`;
+        }).join('')}
       </select></div>`;
+    }
     if (m.type === 'number') return `<div class="form-group">
       <label>${m.label.toUpperCase()}</label>
       <input type="number" class="form-input" id="mf-${f}" min="0" step="0.0001" placeholder="${m.hint||''}">
@@ -1439,11 +1689,14 @@ async function submitMissing() {
     const warn = bubble.querySelector('#missingWarn');
     if (warn) warn.remove();
 
-    // Find the timeline uid from the fill element
-    const fill = bubble.querySelector('.h-tl-fill');
-    const tlUid = fill ? fill.id.replace('-fill','') : 'tl0';
-    setStage(tlUid, 2);
-    await buildAndShowTx(bubble, tlUid);
+    if (state.intentMode === 'transaction') {
+      const fill = bubble.querySelector('.h-tl-fill');
+      const tlUid = fill ? fill.id.replace('-fill','') : 'tl0';
+      setStage(tlUid, 2);
+      await buildAndShowTx(bubble, tlUid);
+    } else {
+      await executeRead(bubble);
+    }
     scrollBottom();
   }
 }
@@ -1475,7 +1728,7 @@ function renderFieldsHtml(parsed, missing) {
   </div>`;
 }
 
-function buildTxCardHtml(tx, strategy) {
+function buildTxCardHtml(tx, strategy, simulationWarning) {
   const valueEth = tx.value ? (parseInt(tx.value,16)/1e18).toFixed(8) : '0';
   const gasLimit  = tx.gas  ? parseInt(tx.gas,16).toLocaleString() : '—';
   const net = state.parsedIntent?.network || strategy?.network || '—';
@@ -1493,9 +1746,15 @@ function buildTxCardHtml(tx, strategy) {
       <span class="gt-val">${fee} gwei</span>
     </div>`;
   };
+  const simBanner = simulationWarning
+    ? `<div class="i-alert warn" style="margin:10px 16px 0;">⚠ <strong>This transaction would likely fail:</strong><br>
+       <span style="font-size:10px;opacity:.85;">${esc(simulationWarning)}</span><br>
+       Common causes: wrong network selected, wallet not funded yet, or the contract address doesn't match this network. You can still sign if you want to try anyway.</div>`
+    : '';
   return `
     <div class="tx-card">
       <div class="tx-card-hdr">TRANSACTION PREVIEW${tx.data ? ' · CONTRACT CALL' : ''}</div>
+      ${simBanner}
       <div class="tx-row"><span class="k">from</span><span class="v amber">${esc(tx.from?.slice(0,10))}…</span></div>
       <div class="tx-row"><span class="k">to</span><span class="v amber">${esc(tx.to?.slice(0,10))}…${esc(tx.to?.slice(-6))}</span></div>
       <div class="tx-row"><span class="k">value</span><span class="v teal">${valueEth} ${esc(nativeLabel)}${testnetBadge}</span></div>
@@ -1725,6 +1984,7 @@ async function fetchMyContracts() {
           <div class="scc-label">${esc(c.label || '')}${c.active ? ' · active' : ''}</div>
         </div>
         <div class="scc-actions">
+          <span class="copy-icon-btn" onclick="copyToClipboard('${c.address}', this)" title="Copy address">⧉</span>
           ${!c.active ? `<button class="scc-btn" onclick="scActivateContract('${c.address}')">Use</button>` : ''}
           <button class="scc-btn" onclick="scRemoveContract('${c.address}')">Remove</button>
         </div>
@@ -1752,6 +2012,81 @@ async function scRegisterContract() {
     document.getElementById('scRegistryLabel').value = '';
     fetchMyContracts();
   } catch(e) { activeEl.innerHTML = `<span style="color:var(--red)">❌ ${esc(e.message)}</span>`; }
+}
+
+/* ── ONE-CLICK DEPLOY ──
+   Compiles + deploys a fresh private contract instance, waits for the
+   receipt to learn the deployed address (eth_sendTransaction only returns
+   the tx hash for a contract creation, not the address), then registers it
+   to the contract_registry (a server-side file, not browser storage — this
+   persists across sessions/devices/browsers for this wallet). */
+async function deployMyContract() {
+  if (!state.walletAddress) { alert('Connect your wallet first.'); return; }
+  if (!window.ethereum) { alert('MetaMask not detected.'); return; }
+
+  const statusEl = document.getElementById('scDeployStatus');
+  statusEl.style.display = 'block';
+  statusEl.innerHTML = '<div class="ins-empty">Compiling contract server-side…</div>';
+
+  try {
+    const res = await fetch(API + '/contracts/supply-chain/deploy', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ network: state.network, from_address: state.walletAddress })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      statusEl.innerHTML = `<div class="i-alert err">❌ ${esc(data.detail || 'Compile/build failed')}</div>`;
+      return;
+    }
+
+    const gasLimit = parseInt(data.tx_params.gas, 16).toLocaleString();
+    const cost = data.strategy?.estimated_cost_usd != null ? `~$${data.strategy.estimated_cost_usd}` : 'unknown cost';
+    statusEl.innerHTML = `<div class="ins-empty">Ready to deploy — gas limit ${gasLimit} (${cost}). Confirm in MetaMask…</div>`;
+
+    await ensureCorrectChain(state.network);
+    const txHash = await window.ethereum.request({ method:'eth_sendTransaction', params:[data.tx_params] });
+    statusEl.innerHTML = `<div class="ins-empty">Deploying… tx ${esc(txHash.slice(0,10))}… (waiting for confirmation, usually 15-60s)</div>`;
+
+    const contractAddress = await waitForContractAddress(txHash);
+    if (!contractAddress) {
+      statusEl.innerHTML = `<div class="i-alert warn">⚠ Still waiting on confirmation after 2 minutes.
+        <a href="${explorerTxUrl(state.network, txHash)}" target="_blank">Check the explorer</a> —
+        once it's mined, paste the resulting contract address into the field below to register it.</div>`;
+      return;
+    }
+
+    statusEl.innerHTML = `<div class="ins-empty">✓ Deployed at ${esc(contractAddress.slice(0,10))}…${esc(contractAddress.slice(-6))} — registering to your wallet…</div>`;
+
+    const regRes = await fetch(API + '/contracts/supply-chain/registry', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        wallet_address: state.walletAddress, network: state.network,
+        contract_address: contractAddress, label: 'Deployed via IntentChain',
+      })
+    });
+    if (regRes.ok) {
+      statusEl.innerHTML = `<div class="i-alert ok">✓ Deployed &amp; registered — this is now your active contract on ${esc(state.network)}, saved permanently to your wallet.<br>
+        <a href="${explorerTxUrl(state.network, txHash)}" target="_blank">↗ View deployment</a></div>`;
+      fetchMyContracts();
+    } else {
+      const regData = await regRes.json().catch(() => ({}));
+      statusEl.innerHTML = `<div class="i-alert warn">⚠ Deployed at ${esc(contractAddress)}, but auto-registration failed (${esc(regData.detail || 'unknown error')}) — paste this address into the field below to register it manually.</div>`;
+    }
+  } catch(e) {
+    statusEl.innerHTML = `<div class="i-alert err">❌ ${esc(e.code===4001 ? 'Rejected by user.' : (e.message || 'Deployment failed'))}</div>`;
+  }
+}
+
+async function waitForContractAddress(txHash, timeoutMs = 120000, intervalMs = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const receipt = await window.ethereum.request({ method: 'eth_getTransactionReceipt', params: [txHash] });
+      if (receipt && receipt.contractAddress) return receipt.contractAddress;
+    } catch(e) { /* keep polling */ }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return null;
 }
 
 async function scActivateContract(address) {
@@ -1792,9 +2127,10 @@ async function copyContractSource() {
 }
 
 /* ── SUPPLY CHAIN ── */
-async function signAndBroadcastGeneric(txParams, successLabel) {
+async function signAndBroadcastGeneric(txParams, network) {
   if (!window.ethereum) { alert('MetaMask not detected.'); return null; }
   try {
+    await ensureCorrectChain(network || state.network);
     const txHash = await window.ethereum.request({ method:'eth_sendTransaction', params:[txParams] });
     return txHash;
   } catch(e) {
@@ -1802,6 +2138,12 @@ async function signAndBroadcastGeneric(txParams, successLabel) {
       `<div class="i-alert err">❌ ${esc(e.code===4001 ? 'Rejected by user.' : (e.message||'Transaction failed'))}</div>`;
     return null;
   }
+}
+
+function simulationWarningHtml(warning) {
+  if (!warning) return '';
+  return `<div class="i-alert warn" style="margin-bottom:8px;">⚠ <strong>This would likely fail:</strong><br>
+    <span style="font-size:10px;opacity:.85;">${esc(warning)}</span></div>`;
 }
 
 async function scRegister() {
@@ -1820,8 +2162,8 @@ async function scRegister() {
     });
     const data = await res.json();
     if (!res.ok) { resultEl.innerHTML = `<div class="i-alert err">❌ ${esc(data.detail || 'Failed')}</div>`; return; }
-    resultEl.innerHTML = '<div class="ins-empty">Confirm in MetaMask…</div>';
-    const hash = await signAndBroadcastGeneric(data.tx_params);
+    resultEl.innerHTML = simulationWarningHtml(data.simulation_warning) + '<div class="ins-empty">Confirm in MetaMask…</div>';
+    const hash = await signAndBroadcastGeneric(data.tx_params, body.network);
     if (hash) resultEl.innerHTML = `<div class="i-alert ok">✓ Batch registered.<br><a href="${explorerTxUrl(state.network, hash)}" target="_blank">↗ View on explorer</a></div>`;
   } catch(e) { resultEl.innerHTML = `<div class="i-alert err">❌ ${esc(e.message)}</div>`; }
 }
@@ -1843,8 +2185,8 @@ async function scCheckpoint() {
     });
     const data = await res.json();
     if (!res.ok) { resultEl.innerHTML = `<div class="i-alert err">❌ ${esc(data.detail || 'Failed')}</div>`; return; }
-    resultEl.innerHTML = '<div class="ins-empty">Confirm in MetaMask…</div>';
-    const hash = await signAndBroadcastGeneric(data.tx_params);
+    resultEl.innerHTML = simulationWarningHtml(data.simulation_warning) + '<div class="ins-empty">Confirm in MetaMask…</div>';
+    const hash = await signAndBroadcastGeneric(data.tx_params, body.network);
     if (hash) resultEl.innerHTML = `<div class="i-alert ok">✓ Checkpoint logged.<br><a href="${explorerTxUrl(state.network, hash)}" target="_blank">↗ View on explorer</a></div>`;
   } catch(e) { resultEl.innerHTML = `<div class="i-alert err">❌ ${esc(e.message)}</div>`; }
 }
@@ -1863,16 +2205,7 @@ async function scLookup() {
     const data = await res.json();
     if (!data.deployed) { resultEl.innerHTML = `<div class="i-alert warn">⚠ ${esc(data.message)}</div>`; return; }
     if (!data.found) { resultEl.innerHTML = '<div class="i-alert warn">⚠ No product found with that batch ID on this network.</div>'; return; }
-    const checkpoints = (data.checkpoints || []).map(c => `
-      <div class="sc-checkpoint-item">
-        <div class="cp-loc">${esc(c.location)} — ${esc(c.status)} ${c.temperature_c ? `(${c.temperature_c}°C)` : ''}</div>
-        <div class="cp-meta">${esc(c.recorded_by.slice(0,10))}… · ${new Date(c.timestamp*1000).toLocaleString()}</div>
-      </div>`).join('') || '<div class="ins-empty">No checkpoints logged yet.</div>';
-    resultEl.innerHTML = `
-      <div class="i-alert ok" style="margin-bottom:10px;">✓ <strong>${esc(data.name)}</strong> — ${esc(data.origin)}<br>
-      Manufacturer: ${esc(data.manufacturer.slice(0,10))}… · Contract: ${esc(data.contract.slice(0,10))}…</div>
-      <div class="sc-section-title">Custody Trail</div>
-      ${checkpoints}`;
+    resultEl.innerHTML = renderReadCard('provenance', data, state.network);
   } catch(e) { resultEl.innerHTML = `<div class="i-alert err">❌ ${esc(e.message)}</div>`; }
 }
 

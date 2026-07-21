@@ -54,6 +54,19 @@ user's request, and fill in whichever fields are relevant to that action (leave 
    fields: product_id, network
 9. Token swap — action: "swap" (not yet executable, but still parse it)
    fields: token, amount, network
+10. General blockchain/crypto knowledge question — the user is asking to learn or understand
+    something (e.g. "what is a blockchain supply network", "how does gas work", "what's the
+    difference between a wallet and a contract") rather than asking to do something with their
+    own wallet — action: "general_question"
+    fields: none of the transaction fields matter for this. Instead, answer the question yourself
+    in the "answer" field: 2-5 sentences, clear and accurate, no jargon left unexplained. If the
+    question is ambiguous between "explain a concept" and "do something in my wallet", prefer
+    the wallet action only if it clearly references the user's own funds/address/history.
+11. Deploy a private supply-chain contract — the user wants their own instance of the
+    supply-chain traceability contract deployed and registered (e.g. "deploy my own supply
+    chain contract", "set up my private traceability contract", "I need my own contract for
+    tracking products") — action: "deploy_contract"
+    fields: network
 
 Return a single JSON object with exactly these keys:
 - action
@@ -70,6 +83,7 @@ Return a single JSON object with exactly these keys:
 - location
 - status
 - temperature_c (number)
+- answer (only meaningful when action is "general_question" — your actual answer to the question, otherwise "none")
 
 User intent: "{user_prompt}"
 
@@ -113,6 +127,7 @@ Return only the JSON object, no additional text."""
         "location": parsed.get("location", "none"),
         "status": parsed.get("status", "none"),
         "temperature_c": parsed.get("temperature_c", 0),
+        "answer": parsed.get("answer", "none"),
     }
 
     return normalized

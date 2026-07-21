@@ -1,6 +1,23 @@
 {
   "0x90b6432ac06ef7551478292ea3343140f6aa5a7a": {
-    "contracts": [],
-    "active": {}
+    "contracts": [
+      {
+        "network": "sepolia",
+        "address": "0x5B38Da6a701c568545dCfcB03FcB875f56beddC4",
+        "label": "COFFEE1",
+        "registered_at": 1784532562.1087708,
+        "updated_at": 1784532562.1087708
+      },
+      {
+        "network": "sepolia",
+        "address": "0x6E291E5Cc9D73531e8a02Fbf3B2c92852D7Db772",
+        "label": "Deployed via IntentChain",
+        "registered_at": 1784617693.027373,
+        "updated_at": 1784617693.027373
+      }
+    ],
+    "active": {
+      "sepolia": "0x6E291E5Cc9D73531e8a02Fbf3B2c92852D7Db772"
+    }
   }
 }
