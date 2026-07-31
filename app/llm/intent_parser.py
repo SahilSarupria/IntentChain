@@ -31,8 +31,37 @@ def _extract_json_from_text(text):
             return None
 
 
-def parse_intent(user_prompt):
-    prompt = f"""Parse the following user intent for a blockchain action and return a JSON object.
+HISTORY_MAX_TURNS = 8
+HISTORY_MAX_CHARS_PER_TURN = 600
+
+
+def _format_history(history) -> str:
+    """Turns a list of {role, content} dicts into a compact transcript block.
+    Defensively trimmed/sanitized server-side regardless of what the client
+    sent — this is untrusted input, not something to trust blindly into a
+    prompt."""
+    if not history or not isinstance(history, list):
+        return ""
+
+    lines = []
+    for turn in history[-HISTORY_MAX_TURNS:]:
+        if not isinstance(turn, dict):
+            continue
+        role = "User" if str(turn.get("role", "")).lower() == "user" else "IntentChain"
+        content = str(turn.get("content", ""))[:HISTORY_MAX_CHARS_PER_TURN]
+        if content.strip():
+            lines.append(f"{role}: {content.strip()}")
+
+    if not lines:
+        return ""
+
+    return "Conversation so far (most recent last):\n" + "\n".join(lines) + "\n\n"
+
+
+def parse_intent(user_prompt, history=None):
+    history_block = _format_history(history)
+
+    prompt = f"""{history_block}Parse the following user intent for a blockchain action and return a JSON object.
 IntentChain supports several kinds of on-chain actions — pick the `action` that best matches the
 user's request, and fill in whichever fields are relevant to that action (leave the rest "none"/0):
 
@@ -84,6 +113,13 @@ Return a single JSON object with exactly these keys:
 - status
 - temperature_c (number)
 - answer (only meaningful when action is "general_question" — your actual answer to the question, otherwise "none")
+
+If a "Conversation so far" section is included above, use it only to understand what the user is
+referring to conversationally (e.g. "it", "that", "the same one" pointing at something discussed
+earlier) — this matters most for general_question answers, so follow-ups stay coherent. Never pull
+amount, recipient, spender, token, or any other transaction field from earlier turns: those must
+always come from the CURRENT message only, even if it means leaving a field "none" for the missing-
+fields flow to ask about. Money-moving fields are never inferred from context.
 
 User intent: "{user_prompt}"
 

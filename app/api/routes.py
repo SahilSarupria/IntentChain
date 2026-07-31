@@ -68,6 +68,7 @@ def _mode_for_action(action: str) -> str:
 
 class PromptRequest(BaseModel):
     prompt: str
+    history: list[dict] = []
 
 class ExecuteReadRequest(BaseModel):
     intent: dict
@@ -139,7 +140,7 @@ async def parse_intent_only(request: PromptRequest, raw: Request):
     client_ip = raw.client.host if raw.client else "unknown"
     log_event("parse_intent", {"status": "started", "prompt_length": len(request.prompt), "client_ip": client_ip})
     try:
-        parsed  = parse_intent(request.prompt)
+        parsed  = parse_intent(request.prompt, request.history)
         mode    = _mode_for_action(parsed.get("action"))
         missing = [] if mode == "knowledge" else _detect_missing(parsed)
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
