@@ -989,13 +989,16 @@ const state = {
   network:       localStorage.getItem('ic_network') || 'sepolia',
   parsedIntent:  null,
   missingFields: [],
-  intentMode:    'transaction', // 'transaction' | 'read' | 'knowledge'
+  intentMode:    'transaction', // 'transaction' | 'read' | 'knowledge' | 'deploy'
   txParams:      null,
   strategy:      null,
   stage:         -1,
   activeMsgEl:   null, // the current AI message element
   preTxBalances: null, // snapshot taken right before signing, for before/after diff
   insightsTab:   'balances',
+  chatHistory:   loadChatHistory(), // persists across reloads; also sent to the LLM for context
+  restoring:     false,             // true while replaying chatHistory into the DOM on load
+  lastFailedPrompt: null,
 };
 
 const STEPS = [
@@ -1047,6 +1050,69 @@ function hideWelcome() {
 /* ══════════════════════════════════════
    CHAT MESSAGE BUILDERS
 ══════════════════════════════════════ */
+/* ══════════════════════════════════════
+   CHAT HISTORY — persistence + LLM context
+   Two jobs: (1) survive a page reload by replaying past messages, and
+   (2) give the LLM the last few turns so follow-ups like "how can I
+   improve it as a developer" know what "it" refers to. Capped in both
+   directions (localStorage size, and how much context we bother sending).
+══════════════════════════════════════ */
+const CHAT_HISTORY_KEY = 'ic_chat_history';
+const CHAT_HISTORY_MAX_STORED = 60;
+const CHAT_HISTORY_MAX_CONTEXT = 8;
+
+function loadChatHistory() {
+  try {
+    const raw = localStorage.getItem(CHAT_HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e) { return []; }
+}
+
+function saveChatHistory() {
+  try { localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(state.chatHistory)); } catch(e) { /* storage full/unavailable — non-fatal */ }
+}
+
+function stripHtmlToText(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  return tmp.textContent.replace(/\s+/g, ' ').trim();
+}
+
+function pushHistory(role, text) {
+  if (state.restoring || !text) return;
+  state.chatHistory.push({ role, text: text.slice(0, 600), ts: Date.now() });
+  if (state.chatHistory.length > CHAT_HISTORY_MAX_STORED) {
+    state.chatHistory = state.chatHistory.slice(-CHAT_HISTORY_MAX_STORED);
+  }
+  saveChatHistory();
+}
+
+/** Recent turns to send alongside the *current* prompt, excluding it. */
+function contextForLLM() {
+  return state.chatHistory.slice(0, -1).slice(-CHAT_HISTORY_MAX_CONTEXT)
+    .map(h => ({ role: h.role, content: h.text }));
+}
+
+function restoreChatUI() {
+  if (!state.chatHistory.length) return;
+  state.restoring = true;
+  hideWelcome();
+  for (const h of state.chatHistory) {
+    if (h.role === 'user') addUserMsg(h.text);
+    else createAiMsg(esc(h.text));
+  }
+  state.restoring = false;
+  scrollBottom();
+}
+
+function retryLastPrompt() {
+  if (!state.lastFailedPrompt) return;
+  const inp = document.getElementById('chatInput');
+  inp.value = state.lastFailedPrompt;
+  state.lastFailedPrompt = null;
+  executeIntent();
+}
+
 function addUserMsg(text) {
   hideWelcome();
   const row = document.createElement('div');
@@ -1058,6 +1124,7 @@ function addUserMsg(text) {
       <div class="msg-bubble">${esc(text)}</div>
     </div>`;
   document.getElementById('chatMessages').appendChild(row);
+  pushHistory('user', text);
   scrollBottom();
 }
 
@@ -1096,6 +1163,7 @@ function createAiMsg(innerHtml, rowId) {
       <div class="msg-bubble">${innerHtml}</div>
     </div>`;
   document.getElementById('chatMessages').appendChild(row);
+  pushHistory('assistant', stripHtmlToText(innerHtml));
   scrollBottom();
   return row.querySelector('.msg-bubble');
 }
@@ -1208,6 +1276,8 @@ function startNewChat() {
   state.parsedIntent = null; state.missingFields = [];
   state.txParams = null; state.strategy = null;
   state.stage = -1; state.activeMsgEl = null;
+  state.chatHistory = []; state.lastFailedPrompt = null;
+  saveChatHistory();
   closePopup();
   document.getElementById('chatMessages').innerHTML = `
     <div id="welcomeScreen" class="welcome-screen">
@@ -1253,9 +1323,9 @@ async function executeIntent() {
     // questions and even balance/history lookups don't need one until the
     // point where we'd actually need an address) ──
     const t0 = Date.now();
-    const res = await fetch(API + '/parse-intent', {
+    const res = await fetchWithRetry(API + '/parse-intent', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ prompt })
+      body: JSON.stringify({ prompt, history: contextForLLM() })
     });
     if (!res.ok) throw new Error((await res.json()).detail || 'Parse failed');
     const data = await res.json();
@@ -1356,9 +1426,26 @@ async function executeIntent() {
 
   } catch(e) {
     hideTyping();
-    createAiMsg(`<span style="color:var(--red)">❌ Error:</span> ${esc(e.message)}`);
+    state.lastFailedPrompt = prompt;
+    const friendly = /fetch/i.test(e.message) ? "Couldn't reach the backend — it may still be starting up, or the connection dropped." : e.message;
+    createAiMsg(`<span style="color:var(--red)">❌ Error:</span> ${esc(friendly)} ` +
+      `<button class="btn btn-ghost" style="padding:3px 10px;font-size:9px;margin-left:4px;" onclick="retryLastPrompt()">↻ Retry</button>`);
   } finally {
     document.getElementById('sendBtn').disabled = false;
+  }
+}
+
+/* ── fetch with one automatic retry on a raw network failure (not HTTP
+   error status — those are handled by the caller via res.ok) ── */
+async function fetchWithRetry(url, options, retries = 1) {
+  try {
+    return await fetch(url, options);
+  } catch(e) {
+    if (retries > 0) {
+      await new Promise(r => setTimeout(r, 700));
+      return fetchWithRetry(url, options, retries - 1);
+    }
+    throw e;
   }
 }
 
@@ -2213,6 +2300,7 @@ async function scLookup() {
    INIT
 ══════════════════════════════════════ */
 updateWalletUI();
+restoreChatUI();
 fetchNetworks().then(fetchGasTicker);
 setInterval(fetchGasTicker, 20000);
 checkBackend();
