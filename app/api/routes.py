@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request, Query, Response
 from pydantic import BaseModel
 import time
 import os
@@ -6,7 +6,10 @@ from web3 import Web3
 
 from app.llm.intent_parser import parse_intent
 from app.services.intent_engine import build_tx_for_wallet
-from app.core.logger import get_logs, clear_logs, log_event, get_stats
+from app.core.logger import (
+    get_logs, clear_logs, log_event, get_stats,
+    get_metrics_snapshot, get_active_user_count,
+)
 from app.blockchain.rpc import get_w3, is_connected
 from app.blockchain import erc20, etherscan_client
 from app.blockchain.gas_oracle import compute_gas_strategies
@@ -290,6 +293,83 @@ async def clear_activity_logs():
 @router.get("/health")
 async def health_check():
     return {"status": "ok", "stats": get_stats()}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# METRICS — powers both the in-app dashboard (frontend/metrics.html) and,
+# via /metrics/prometheus, a real Prometheus + Grafana stack (see monitoring/).
+# ─────────────────────────────────────────────────────────────────────────
+@router.get("/metrics")
+async def metrics_json():
+    """JSON snapshot: current totals, active users, per-minute time series,
+    and breakdowns by action/network. Polled directly by the in-app dashboard."""
+    return get_metrics_snapshot()
+
+
+@router.get("/metrics/prometheus")
+async def metrics_prometheus():
+    """Prometheus exposition format — point a Prometheus `scrape_config` at
+    this path (see monitoring/prometheus.yml) to feed a real Grafana instance."""
+    stats = get_stats()
+    active_users = get_active_user_count()
+    snapshot = get_metrics_snapshot()
+
+    lines = [
+        "# HELP intentchain_requests_total Total intent-parse requests received.",
+        "# TYPE intentchain_requests_total counter",
+        f'intentchain_requests_total {stats["total_requests"]}',
+
+        "# HELP intentchain_successful_parses_total Successfully parsed intents.",
+        "# TYPE intentchain_successful_parses_total counter",
+        f'intentchain_successful_parses_total {stats["successful_parses"]}',
+
+        "# HELP intentchain_failed_parses_total Failed intent parses.",
+        "# TYPE intentchain_failed_parses_total counter",
+        f'intentchain_failed_parses_total {stats["failed_parses"]}',
+
+        "# HELP intentchain_txs_built_total Unsigned transactions built.",
+        "# TYPE intentchain_txs_built_total counter",
+        f'intentchain_txs_built_total {stats["txs_built"]}',
+
+        "# HELP intentchain_txs_sent_total Transactions signed and broadcast by the user.",
+        "# TYPE intentchain_txs_sent_total counter",
+        f'intentchain_txs_sent_total {stats["txs_sent"]}',
+
+        "# HELP intentchain_txs_rejected_total Transactions rejected or failed in-wallet.",
+        "# TYPE intentchain_txs_rejected_total counter",
+        f'intentchain_txs_rejected_total {stats["txs_rejected"]}',
+
+        "# HELP intentchain_avg_latency_ms Average server-side latency across all timed events.",
+        "# TYPE intentchain_avg_latency_ms gauge",
+        f'intentchain_avg_latency_ms {stats["avg_latency_ms"]}',
+
+        "# HELP intentchain_active_users Distinct clients seen in the last 5 minutes.",
+        "# TYPE intentchain_active_users gauge",
+        f'intentchain_active_users {active_users}',
+
+        "# HELP intentchain_uptime_seconds Seconds since the server process started.",
+        "# TYPE intentchain_uptime_seconds gauge",
+        f'intentchain_uptime_seconds {stats["uptime_seconds"]}',
+    ]
+
+    lines += [
+        "# HELP intentchain_requests_by_action_total Requests broken down by parsed action.",
+        "# TYPE intentchain_requests_by_action_total counter",
+    ]
+    for action, count in snapshot["by_action"].items():
+        safe = action.replace('"', '\\"')
+        lines.append(f'intentchain_requests_by_action_total{{action="{safe}"}} {count}')
+
+    lines += [
+        "# HELP intentchain_requests_by_network_total Requests broken down by network.",
+        "# TYPE intentchain_requests_by_network_total counter",
+    ]
+    for network, count in snapshot["by_network"].items():
+        safe = network.replace('"', '\\"')
+        lines.append(f'intentchain_requests_by_network_total{{network="{safe}"}} {count}')
+
+    body = "\n".join(lines) + "\n"
+    return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
 @router.post("/log-tx-result")

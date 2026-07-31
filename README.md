@@ -69,6 +69,15 @@ Open `frontend/index.html` in a browser (or serve it statically) with
 MetaMask installed. Everything else — networks, gas ticker, balances — is
 optional but works better the more of `.env` you fill in.
 
+**Metrics dashboard** — every request already flows through
+`app/core/logger.py`, which now also tracks per-minute time series, active
+users, and per-action/network breakdowns. Two ways to view it:
+- Open `frontend/metrics.html` (or click **📈 Metrics** in the app header) —
+  a zero-setup live dashboard styled to match the app.
+- `cd monitoring && docker compose up -d` for a real Prometheus + Grafana
+  stack, auto-provisioned and ready at `localhost:3000`. See
+  `monitoring/README.md`.
+
 ## Project layout
 
 ```
@@ -94,6 +103,8 @@ app/
     networks.py                  chain registry (RPCs, chain IDs, explorers)
     tokens.json                  known ERC-20 token registry, editable
 frontend/index.html              chat UI + Insights panel (balances/history/supply chain)
+frontend/metrics.html            live system metrics dashboard (latency, active users, tx rates)
+monitoring/                       Prometheus + Grafana stack (docker compose up -d)
 dashboard.py                     legacy Streamlit debug dashboard (secondary, not the main UI)
 ```
 

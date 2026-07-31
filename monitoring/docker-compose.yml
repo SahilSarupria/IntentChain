@@ -1,0 +1,48 @@
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: intentchain-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      # Lets the container reach the FastAPI app running on your host
+      # machine (uvicorn app.main:app) via host.docker.internal, matching
+      # the target in prometheus.yml. No-op on Docker Desktop (Mac/Windows,
+      # already supported); required on native Linux Docker.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: intentchain-grafana
+    ports:
+      # Grafana always listens on 3000 *inside* its own container — that's
+      # fixed by the image, not something you can move by editing the right
+      # side of this mapping. If host port 3000 is already taken (e.g. by
+      # a local frontend dev server), change the LEFT side only, e.g.
+      # "3002:3000", and open Grafana at that host port instead.
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      # Skip the "change your password" wall for local dev; drop this in
+      # anything shared/production.
+      - GF_USERS_DEFAULT_THEME=dark
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:

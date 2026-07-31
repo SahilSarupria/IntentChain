@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "intentchain"
+    metrics_path: /metrics/prometheus
+    static_configs:
+      # host.docker.internal resolves to the Docker host from inside the
+      # Prometheus container, so this works whether you run the FastAPI
+      # app with `uvicorn app.main:app` directly on your machine (the
+      # normal dev flow — see README) or in its own container on the same
+      # host. On native Linux Docker, host.docker.internal needs the
+      # extra_hosts entry already set in docker-compose.yml.
+      - targets: ["host.docker.internal:8000"]

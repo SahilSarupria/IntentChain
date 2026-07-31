@@ -1,0 +1,96 @@
+{
+  "title": "IntentChain — System Metrics",
+  "uid": "intentchain-metrics",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["intentchain"],
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Requests / sec",
+      "gridPos": { "h": 5, "w": 4, "x": 0, "y": 0 },
+      "targets": [{ "expr": "rate(intentchain_requests_total[5m])", "legendFormat": "req/s" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "steps": [{ "color": "orange", "value": null }] }, "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "type": "gauge",
+      "title": "Success Rate",
+      "gridPos": { "h": 5, "w": 4, "x": 4, "y": 0 },
+      "targets": [{ "expr": "100 * intentchain_successful_parses_total / clamp_min(intentchain_requests_total, 1)", "legendFormat": "success %" }],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [
+        { "color": "red", "value": null }, { "color": "orange", "value": 70 }, { "color": "green", "value": 90 }
+      ] } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Avg Latency",
+      "gridPos": { "h": 5, "w": 4, "x": 8, "y": 0 },
+      "targets": [{ "expr": "intentchain_avg_latency_ms", "legendFormat": "ms" }],
+      "fieldConfig": { "defaults": { "unit": "ms", "color": { "mode": "thresholds" }, "thresholds": { "steps": [
+        { "color": "green", "value": null }, { "color": "orange", "value": 800 }, { "color": "red", "value": 2000 }
+      ] } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Active Users",
+      "gridPos": { "h": 5, "w": 4, "x": 12, "y": 0 },
+      "targets": [{ "expr": "intentchain_active_users", "legendFormat": "active" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Txs Sent",
+      "gridPos": { "h": 5, "w": 4, "x": 16, "y": 0 },
+      "targets": [{ "expr": "intentchain_txs_sent_total", "legendFormat": "sent" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Txs Rejected",
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
+      "targets": [{ "expr": "intentchain_txs_rejected_total", "legendFormat": "rejected" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "red" } }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Request Rate & Failures",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+      "targets": [
+        { "expr": "rate(intentchain_requests_total[1m])", "legendFormat": "requests/s" },
+        { "expr": "rate(intentchain_failed_parses_total[1m])", "legendFormat": "failed/s" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency Over Time",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+      "targets": [{ "expr": "intentchain_avg_latency_ms", "legendFormat": "avg latency (ms)" }],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "type": "barchart",
+      "title": "Requests by Action",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 13 },
+      "targets": [{ "expr": "intentchain_requests_by_action_total", "legendFormat": "{{action}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "type": "piechart",
+      "title": "Requests by Network",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 13 },
+      "targets": [{ "expr": "intentchain_requests_by_network_total", "legendFormat": "{{network}}" }],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Uptime",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 13 },
+      "targets": [{ "expr": "intentchain_uptime_seconds", "legendFormat": "uptime" }],
+      "fieldConfig": { "defaults": { "unit": "s", "color": { "mode": "fixed", "fixedColor": "blue" } }, "overrides": [] }
+    }
+  ]
+}
