@@ -1,0 +1,6 @@
+id,rep,category,prompt,parsed_action,parsed_token,parsed_amount,parsed_target,parsed_network,parsed_priority,parsed_gas_mode,missing_detected,stage,guard_decision,guard_codes,parse_latency_ms,retries,parse_error,build_error
+P001,0,A_native_clear,send 0.01 ETH to 0x7eeb8a1ec9332a30a983694d1b428f3e50e86c2c on sepolia,transfer,ETH,0.01,0x7eeb8a1ec9332a30a983694d1b428f3e50e86c2c,sepolia,normal,none,,guarded,ALLOW,,2322.4,0,,
+P002,0,A_native_clear,transfer 0.5 ETH to 0x5f2ca9635310f88053fc3fcdceab11b9d49fc08f on ethereum mainnet,transfer,ETH,0.5,0x5f2ca9635310f88053fc3fcdceab11b9d49fc08f,ethereum,normal,none,,guarded,ALLOW,,2338.5,0,,
+P003,0,A_native_clear,Send 1 ETH to 0xbf54a2989d5e52e2a3c6439edc106b45dfb81df8 on arbitrum,transfer,ETH,1,0xbf54a2989d5e52e2a3c6439edc106b45dfb81df8,arbitrum,normal,none,,guarded,ALLOW,,2703.6,0,,
+P004,0,A_native_clear,pay 0x2a1804225f969f1a6e7c618c8fc9d640075fcc2e 0.25 ETH on optimism,transfer,ETH,0.25,0x2a1804225f969f1a6e7c618c8fc9d640075fcc2e,optimism,none,none,priority,stopped_missing_fields,,,3284.8,0,,
+P005,0,A_native_clear,send 10 MATIC to 0x7eeb8a1ec9332a30a983694d1b428f3e50e86c2c on polygon,transfer,MATIC,10,0x7eeb8a1ec9332a30a983694d1b428f3e50e86c2c,polygon,normal,none,,guarded,ALLOW,,2564.4,0,,

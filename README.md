@@ -106,3 +106,174 @@ dashboard.py                     legacy Streamlit debug dashboard (secondary, no
   production use.
 - Token/contract-address inputs are trusted as given — there's no allowlist
   beyond `app/config/tokens.json`; always double-check what you're signing.
+
+## Architecture and workflow
+
+IntentChain is a non-custodial natural-language blockchain agent. The backend
+interprets the user's request and prepares data or an unsigned transaction;
+MetaMask remains responsible for the private key, signature, and broadcast.
+
+### Request lifecycle
+
+```text
+User prompt in frontend/index.html
+        |
+        v
+POST /parse-intent
+        |
+        v
+Gemini returns normalized intent JSON
+        |
+        +--> knowledge: show the LLM's explanation
+        |
+        +--> read: POST /execute-read and query RPC/Etherscan/contracts
+        |
+        +--> deploy: compile contract, prepare creation tx, MetaMask signs
+        |
+        +--> transaction: strategy engine -> tx builder -> unsigned tx
+                                                     |
+                                                     v
+                                      MetaMask eth_sendTransaction
+                                                     |
+                                                     v
+                                           signed transaction on-chain
+```
+
+For a transaction request, `app/api/routes.py` checks which fields are needed
+for the selected action. `app/services/intent_engine.py` calls
+`app/services/strategy_engine.py` for the network, gas tier, fee fields, gas
+estimate, and approximate USD cost. `app/services/tx_builder.py` dispatches to
+the correct builder: a native transfer, ERC-20 transfer/approval, or
+supply-chain contract call. The result contains `tx_params`, which the
+frontend passes to MetaMask. The backend does not sign transactions.
+
+The frontend also performs a client-side chain check before signing. It asks
+MetaMask to switch to the transaction's chain, renders fee alternatives, and
+shows any best-effort `eth_call` simulation warning returned by the backend.
+
+### Four application paths
+
+- **Transaction:** native transfers, bridge-style native transfers, ERC-20
+  transfers/approvals, product registration, and checkpoint logging. These
+  require a signature.
+- **Read:** balance checks, transaction history, and product verification. These
+  query chain/API data and do not require a signature.
+- **Knowledge:** general blockchain questions are answered by the LLM without
+  building a transaction.
+- **Deploy:** the supply-chain Solidity contract is compiled server-side, an
+  unsigned contract-creation transaction is returned, and MetaMask deploys it.
+
+`swap` is parsed but intentionally rejected by the transaction builder because
+no DEX aggregator is connected yet.
+
+### Current versus legacy code
+
+The current transaction path is:
+
+```text
+app/api/routes.py
+  -> app/services/intent_engine.py
+  -> app/services/strategy_engine.py
+  -> app/services/tx_builder.py
+  -> MetaMask in frontend/index.html
+```
+
+`app/blockchain/executor.py` is now only a backwards-compatible wrapper around
+`tx_builder.py`. The original backend-signing design is described in
+`LLM_CONTEXT_HANDOFF.md`, but it is historical and should not be treated as the
+current security model. `dashboard.py` is a legacy Streamlit debug/demo UI;
+`frontend/index.html` is the primary interface.
+
+## Claude Code context guide
+
+Do not pass the entire repository for every task. Start with the smallest set
+below and add adjacent files only when the change crosses that boundary.
+
+### Always provide for backend workflow changes
+
+- `README.md`
+- `app/main.py`
+- `app/api/routes.py`
+- `app/llm/intent_parser.py`
+- `app/services/intent_engine.py`
+- `app/services/strategy_engine.py`
+- `app/services/tx_builder.py`
+- `app/config/networks.py`
+- `requirements.txt`
+
+Also provide `frontend/index.html` whenever the API response shape, wallet
+signing behavior, network switching, or visible transaction preview changes.
+
+### Add these files by feature
+
+**Native transfers and gas:**
+
+- `app/blockchain/rpc.py`
+- `app/blockchain/gas_oracle.py`
+- `app/services/price_feed.py`
+- `frontend/index.html`
+
+**ERC-20 tokens:**
+
+- `app/blockchain/erc20.py`
+- `app/config/tokens.json`
+- `app/blockchain/rpc.py`
+- `frontend/index.html`
+
+**Balances and transaction history:**
+
+- `app/api/routes.py`
+- `app/blockchain/erc20.py`
+- `app/blockchain/etherscan_client.py`
+- `app/config/networks.py`
+- `frontend/index.html`
+
+**Supply-chain registration, checkpoints, or verification:**
+
+- `app/services/supply_chain_service.py`
+- `app/services/tx_builder.py`
+- `app/blockchain/contracts/SupplyChainTraceability.sol`
+- `app/blockchain/contracts/supply_chain_abi.py`
+- `app/services/contract_registry.py`
+- `app/data/contract_registry.json` only when investigating existing local
+  registrations, never as a general reusable context file
+- `frontend/index.html`
+
+**One-click contract deployment:**
+
+- `app/api/routes.py`
+- `app/blockchain/contract_compiler.py`
+- `app/blockchain/contracts/SupplyChainTraceability.sol`
+- `app/services/contract_registry.py`
+- `frontend/index.html`
+- `requirements.txt`
+
+**Wallet/signing or MetaMask issues:**
+
+- `frontend/index.html`
+- `app/api/routes.py`
+- `app/services/tx_builder.py`
+- `app/config/networks.py`
+- `app/blockchain/rpc.py`
+
+**Observability or health endpoints:**
+
+- `app/core/logger.py`
+- `app/api/routes.py`
+- `frontend/index.html` if the displayed status or metrics change
+
+### Files to exclude from Claude Code context
+
+- `.env` and any private keys, seed phrases, API keys, or RPC URLs containing
+  credentials
+- `app/data/contract_registry.json` unless the task specifically concerns its
+  current contents
+- large logs, local caches, virtual environments, and generated compiler files
+- `LLM_CONTEXT_HANDOFF.md` for current implementation work unless historical
+  comparison is needed
+- `dashboard.py` unless the task explicitly targets the legacy Streamlit UI
+
+When asking Claude Code for an improvement, include the desired behavior, the
+relevant endpoint or UI action, an example input and expected output, and the
+network used for testing. Mention whether the change must preserve the
+non-custodial rule: the server must never receive or use a private key.
