@@ -84,6 +84,35 @@ def load_guard(repo):
     sys.exit("tx_guard.py not found: put it next to this script or in <repo>/app/services/")
 
 
+def postprocess(rec, parsed, r, a, tokens, guard):
+    """missing-field rule -> offline tx build -> guard. Priority (and network) are auto-filled like a user answering the UI popup."""
+    if parsed is None:
+        rec["stage"] = "parse_failed"; return
+    act = str(parsed.get("action", "")).lower(); rec["action_class"] = ACTION_CLASS.get(act, "other")
+    missing = [] if act == "general_question" else detect_missing(parsed)
+    rec["missing_detected"] = missing
+    if act in ("transfer", "send", "bridge", "transfer_token", "send_token", "approve_token"):
+        non_net = [m for m in missing if m not in ("network", "priority")]
+        rec["priority_filled"] = "priority" in missing
+        if non_net: rec["stage"] = "stopped_missing_fields"; return
+        net = str(parsed.get("network", "none")).lower()
+        rec["network_filled"] = net not in CHAIN_IDS
+        net = net if net in CHAIN_IDS else a.default_network
+        tgt = str(parsed.get("spender") if act == "approve_token" else parsed.get("recipient"))
+        rec["resolved_network"] = net; rec["target"] = tgt
+        try:
+            if not ADDR_RE.match(tgt): raise ValueError("target is not a valid 0x address")
+            tx = build_tx(act, parsed.get("token"), parsed.get("amount"), tgt, net, tokens); rec["tx"] = tx
+            intent = dict(action=act, token=parsed.get("token"), amount=parsed.get("amount"), recipient=parsed.get("recipient"), spender=parsed.get("spender"), network=net)
+            g = guard.verify(r["prompt"], intent, tx, known_tokens=tokens.get(net, {}), chain_ids=CHAIN_IDS, address_book=CONTACTS)
+            rec["stage"] = "guarded"; rec["guard_decision"] = g.decision
+            rec["guard_findings"] = [dict(check=x.check, code=x.code, severity=x.severity) for x in g.findings]
+        except Exception as e:
+            rec["stage"] = "build_error"; rec["build_error"] = str(e)[:200]
+    else:
+        rec["stage"] = "non_transaction"
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default="."); ap.add_argument("--prompts", default="prompts.csv"); ap.add_argument("--out", default="out")
@@ -102,11 +131,19 @@ def main():
     rows = list(csv.DictReader(open(a.prompts, encoding="utf-8")))
     if a.limit: rows = rows[:a.limit]
     rp = os.path.join(a.out, "results.jsonl")
-    done = set()
+    done = set(); keep = []
     if os.path.exists(rp):
+        byid = {x["id"]: x for x in rows}
         for line in open(rp, encoding="utf-8"):
-            try: j = json.loads(line); done.add((j["id"], j["rep"]))
-            except Exception: pass
+            try: j = json.loads(line)
+            except Exception: continue
+            if j.get("parse_error") or j.get("parsed") is None and j.get("stage") == "parse_failed": continue   # redo failed calls
+            if j.get("stage") == "stopped_missing_fields" and j.get("missing_detected") == ["priority"] and j["id"] in byid:
+                for kx in ("stage", "tx", "guard_decision", "guard_findings", "build_error", "target", "resolved_network"): j.pop(kx, None)
+                postprocess(j, j["parsed"], byid[j["id"]], a, tokens, guard); j["reprocessed_priority_fill"] = True
+            keep.append(j); done.add((j["id"], j["rep"]))
+        with open(rp, "w", encoding="utf-8") as fw:
+            for j in keep: fw.write(json.dumps(j, ensure_ascii=False, default=str) + "\n")
     json.dump(dict(start_utc=datetime.now(timezone.utc).isoformat(), model="gemini-2.5-flash (hardcoded in intent_parser.py)", mock=a.mock, python=sys.version.split()[0],
                    platform=platform.platform(), n_prompts=len(rows), repeats=a.repeats, sleep=a.sleep), open(os.path.join(a.out, "run_meta.json"), "w"), indent=1)
     f = open(rp, "a", encoding="utf-8")
@@ -124,34 +161,13 @@ def main():
                     parsed = parse(r["prompt"]); lat = round((time.perf_counter() - t0) * 1000, 1); break
                 except Exception as e:
                     msg = f"{type(e).__name__}: {e}"
+                    if re.search(r"PerDay|per day|daily", msg, re.I) and re.search(r"429|RESOURCE_EXHAUSTED", msg):
+                        f.close(); print("\nDAILY QUOTA EXHAUSTED on the Gemini key: stopping cleanly. Nothing was lost; re-run later (after the quota resets or after enabling billing) and it resumes here."); sys.exit(2)
                     if retries < 5 and re.search(r"429|RESOURCE_EXHAUSTED|503|UNAVAILABLE|500|timeout|deadline", msg, re.I):
                         retries += 1; w = 15 * 2 ** (retries - 1); print(f"   rate/availability error, waiting {w}s ({retries}/5)"); time.sleep(w); continue
                     err = msg[:400]; lat = round((time.perf_counter() - t0) * 1000, 1); break
             rec.update(parse_error=err, parse_latency_ms=lat, retries=retries, parsed=parsed)
-            if parsed is not None:
-                act = str(parsed.get("action", "")).lower(); rec["action_class"] = ACTION_CLASS.get(act, "other")
-                missing = [] if act == "general_question" else detect_missing(parsed)
-                rec["missing_detected"] = missing
-                if act in ("transfer", "send", "bridge", "transfer_token", "send_token", "approve_token"):
-                    non_net = [m for m in missing if m != "network"]
-                    if non_net: rec["stage"] = "stopped_missing_fields"
-                    else:
-                        net = str(parsed.get("network", "none")).lower()
-                        rec["network_filled"] = net not in CHAIN_IDS
-                        net = net if net in CHAIN_IDS else a.default_network
-                        tgt = str(parsed.get("spender") if act == "approve_token" else parsed.get("recipient"))
-                        rec["resolved_network"] = net; rec["target"] = tgt
-                        try:
-                            if not ADDR_RE.match(tgt): raise ValueError("target is not a valid 0x address")
-                            tx = build_tx(act, parsed.get("token"), parsed.get("amount"), tgt, net, tokens); rec["tx"] = tx
-                            intent = dict(action=act, token=parsed.get("token"), amount=parsed.get("amount"), recipient=parsed.get("recipient"), spender=parsed.get("spender"), network=net)
-                            g = guard.verify(r["prompt"], intent, tx, known_tokens=tokens.get(net, {}), chain_ids=CHAIN_IDS, address_book=CONTACTS)
-                            rec["stage"] = "guarded"; rec["guard_decision"] = g.decision
-                            rec["guard_findings"] = [dict(check=x.check, code=x.code, severity=x.severity) for x in g.findings]
-                        except Exception as e:
-                            rec["stage"] = "build_error"; rec["build_error"] = str(e)[:200]
-                else: rec["stage"] = "non_transaction"
-            else: rec["stage"] = "parse_failed"
+            postprocess(rec, parsed, r, a, tokens, guard)
             f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n"); f.flush()
             print(f"[{k}/{total}] {r['id']} {rec.get('action_class','-'):9s} {rec['stage']:22s} {rec.get('guard_decision','')}  {lat}ms")
             if not a.mock: time.sleep(a.sleep)
