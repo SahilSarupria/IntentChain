@@ -34,6 +34,8 @@ TIER_WEIGHTS = {
 }
 EQUAL_WEIGHTS = (1 / 3, 1 / 3, 1 / 3)
 
+MAT_TAU = 0.01     # materiality: a fee of 1% of the transfer value counts as "fully material"
+MAT_TREF_S = 60.0  # reference patience window (s) for the time term
 VALUE_GAMMA = 0.5    # max share of the remaining weight moved to cost
 VALUE_TAU = 0.05     # fee/value ratio at which the shift saturates
 
@@ -68,7 +70,8 @@ def _lognorm(values: list[float]) -> list[float]:
 
 def select_chain(cands: list[ChainCandidate], tier: str, amount_usd: float,
                  *, use_balance: bool = True, use_health: bool = True,
-                 use_value_aware: bool = True, weights: tuple | None = None) -> Selection:
+                 use_value_aware: bool = True, weights: tuple | None = None,
+                 normalization: str = "minmax") -> Selection:
     """Return the best feasible chain. Flags exist so the ablations in the
     paper can switch single components off; production use leaves defaults."""
     w_c, w_t, w_r = weights or TIER_WEIGHTS.get(tier, TIER_WEIGHTS["standard"])
@@ -88,6 +91,8 @@ def select_chain(cands: list[ChainCandidate], tier: str, amount_usd: float,
         return Selection(None, [], excluded, (w_c, w_t, w_r),
                          "No feasible chain: " + "; ".join(f"{k}: {v}" for k, v in excluded.items()))
 
+    if normalization == "materiality":
+        use_value_aware = False        # materiality already scales cost by transfer value
     if use_value_aware and amount_usd > 0:
         ratio = min(c.fee_usd for c in feasible) / amount_usd
         shift = VALUE_GAMMA * min(1.0, ratio / VALUE_TAU)
@@ -96,8 +101,13 @@ def select_chain(cands: list[ChainCandidate], tier: str, amount_usd: float,
         scale = (1 - w_c_adj) / rest if rest > 0 else 0
         w_c, w_t, w_r = w_c_adj, w_t * scale, w_r * scale
 
-    cn = _lognorm([c.fee_usd for c in feasible])
-    tn = _lognorm([c.conf_time_s for c in feasible])
+    if normalization == "materiality":
+        # absolute, value-relative scales: sub-material fee differences stop driving the choice
+        cn = [min(1.0, c.fee_usd / (MAT_TAU * amount_usd)) if amount_usd > 0 else 1.0 for c in feasible]
+        tn = [min(1.0, c.conf_time_s / MAT_TREF_S) for c in feasible]
+    else:
+        cn = _lognorm([c.fee_usd for c in feasible])
+        tn = _lognorm([c.conf_time_s for c in feasible])
     ranked = []
     for c, ci, ti in zip(feasible, cn, tn):
         parts = {"cost": ci, "time": ti, "unreliability": 1 - c.reliability}

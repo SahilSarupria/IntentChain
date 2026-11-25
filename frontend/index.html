@@ -999,6 +999,7 @@ const state = {
   chatHistory:   loadChatHistory(), // persists across reloads; also sent to the LLM for context
   restoring:     false,             // true while replaying chatHistory into the DOM on load
   lastFailedPrompt: null,
+  lastPrompt: null,
 };
 
 const STEPS = [
@@ -1327,6 +1328,7 @@ async function executeIntent() {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ prompt, history: contextForLLM() })
     });
+    state.lastPrompt = prompt;
     if (!res.ok) throw new Error((await res.json()).detail || 'Parse failed');
     const data = await res.json();
     const parseMs = data.latency_ms || (Date.now() - t0);
@@ -1542,10 +1544,25 @@ async function buildAndShowTx(bubble, tlUid) {
     const t0 = Date.now();
     const res = await fetch(API + '/build-tx', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ intent: state.parsedIntent, from_address: state.walletAddress })
+      body: JSON.stringify({
+        intent: state.parsedIntent,
+        from_address: state.walletAddress,
+        prompt: state.lastPrompt
+      })
     });
     if (!res.ok) throw new Error((await res.json()).detail || 'Build failed');
     const data = await res.json();
+
+    if (data.guard?.decision === 'BLOCK') {
+      bubble.insertAdjacentHTML('beforeend', `<div class="i-alert err">🛑 Blocked: ${esc(data.guard.findings.map(f=>f.message).join(' '))}<br><small>${esc(data.guard.summary)}</small></div>`);
+      return;
+    }
+    if (data.guard?.decision === 'CONFIRM') {
+      const ok = confirm('Please check before signing:\n\n' + data.guard.findings.map(f=>'• '+f.message).join('\n') + '\n\nThis transaction will: ' + data.guard.summary);
+      if (!ok) return;
+    }
+    if (data.selection) bubble.insertAdjacentHTML('beforeend', `<div class="i-alert">⛓ ${esc(data.selection.explanation)}</div>`);
+
     const buildMs = data.latency_ms || (Date.now() - t0);
 
     console.log('[metrics] build_tx', { latency_ms: buildMs, strategy: data.strategy });

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 import time
 import os
 from web3 import Web3
-
+from app.services.guard_hook import guard_transaction, pick_network
 from app.llm.intent_parser import parse_intent
 from app.services.intent_engine import build_tx_for_wallet
 from app.core.logger import get_logs, clear_logs, log_event, get_stats
@@ -25,11 +25,11 @@ MISSING_SENTINEL = {"none", "", "null", "unknown", "n/a", "0"}
 # "missing fields" popup relevant instead of always demanding all 5 original
 # fields regardless of what the user asked for.
 REQUIRED_FIELDS_BY_ACTION = {
-    "transfer":         ["action", "amount", "recipient", "network", "priority"],
-    "send":             ["action", "amount", "recipient", "network", "priority"],
+    "transfer":         ["action", "amount", "recipient", "priority"],
+    "send":             ["action", "amount", "recipient", "priority"],
     "bridge":           ["action", "amount", "recipient", "network", "priority"],
-    "transfer_token":   ["action", "token", "amount", "recipient", "network", "priority"],
-    "send_token":       ["action", "token", "amount", "recipient", "network", "priority"],
+    "transfer_token":   ["action", "token", "amount", "recipient", "priority"],
+    "send_token":       ["action", "token", "amount", "recipient", "priority"],
     "approve_token":    ["action", "token", "amount", "spender", "network", "priority"],
     "check_balance":    ["action", "network"],
     "get_history":      ["action", "network"],
@@ -77,6 +77,7 @@ class ExecuteReadRequest(BaseModel):
 class BuildTxRequest(BaseModel):
     intent:       dict
     from_address: str
+    prompt:       str = ""
 
 class SupplyChainRegisterRequest(BaseModel):
     network: str = "sepolia"
@@ -252,7 +253,20 @@ async def build_tx(request: BuildTxRequest):
         "from_address": (request.from_address[:10] + "…") if request.from_address else "unknown",
     })
     try:
-        result = build_tx_for_wallet(request.intent, request.from_address)
+        intent = dict(request.intent)
+        sel = None
+        if str(intent.get("network", "")).lower() in MISSING_SENTINEL:          # user did not name a network -> ICS-M
+            sel = pick_network(intent, request.from_address)
+            if not sel["network"]:
+                raise ValueError(sel["explanation"])
+            intent["network"] = sel["network"]
+        result = build_tx_for_wallet(intent, request.from_address)
+        g0 = time.perf_counter()
+        result["guard"] = guard_transaction(request.prompt, intent, result["tx_params"], request.from_address)
+        result["guard_ms"] = round((time.perf_counter() - g0) * 1000, 3)
+        if sel: result["selection"] = sel
+        if result["guard"]["decision"] == "BLOCK":
+            log_event("build_tx", {"status": "blocked_by_guard", "findings": [f["code"] for f in result["guard"]["findings"]]})
         latency_ms = round((time.perf_counter() - t0) * 1000, 2)
         strategy = result.get("strategy", {})
         log_event("build_tx", {
